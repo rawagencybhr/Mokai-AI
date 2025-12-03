@@ -1,0 +1,7 @@
+{
+  "name": "Store Assistant",
+  "description": "A smart, Khaleeji-dialect furniture sales assistant powered by Gemini 2.5 Flash.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
