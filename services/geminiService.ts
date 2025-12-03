@@ -1,83 +1,100 @@
-import { GoogleGenAI, Chat, GenerateContentResponse, Part, Content } from "@google/genai";
+import {
+  GoogleGenerativeAI,
+  type Content,
+  type Part,
+} from "@google/generative-ai";
+
 import { MODEL_NAME } from "../constants";
 import { Message, Sender } from "../types";
 
-// دالة لتهيئة الجلسة مع التاريخ السابق
-export const createChatSession = (systemInstruction: string, history: Content[] = []): Chat => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  return ai.chats.create({
+/* -----------------------------------------------------------
+   1) إنشاء جلسة محادثة مع جيميني + النظام + التاريخ
+----------------------------------------------------------- */
+export const createChatSession = (systemInstruction: string, history: Content[] = []) => {
+  const ai = new GoogleGenerativeAI(process.env.API_KEY!);
+
+  return ai.getGenerativeModel({
     model: MODEL_NAME,
-    config: {
-      systemInstruction: systemInstruction,
+    systemInstruction,
+    history,
+    generationConfig: {
       temperature: 0.7,
       topK: 40,
       topP: 0.95,
     },
-    history: history
   });
 };
 
+/* -----------------------------------------------------------
+   2) إرسال رسالة إلى جيميني (يدعم نص + صورة)
+----------------------------------------------------------- */
 export const sendMessageToGemini = async (
   text: string,
   systemInstruction: string,
-  previousMessages: Message[], // استقبال الرسائل السابقة
+  previousMessages: Message[],
   imageBase64?: string,
   mimeType: string = "image/jpeg"
 ): Promise<string> => {
   try {
-    // 1. تحويل رسائل التطبيق إلى صيغة يفهمها جيمناي (History)
-    // نستثني رسائل النظام ورسائل الخطأ، ونأخذ آخر 10 رسائل للحفاظ على الأداء
-    // IMPORTANT: Filter out messages where text is empty or whitespace, as Gemini history parts cannot be empty.
+    // تجهيز التاريخ (آخر 10 رسائل فقط)
     const history: Content[] = previousMessages
-      .filter(msg => (msg.sender === Sender.USER || msg.sender === Sender.AGENT) && msg.text && msg.text.trim() !== "")
-      .slice(-10) // نأخذ آخر 10 رسائل فقط كسياق
-      .map(msg => ({
-        role: msg.sender === Sender.USER ? 'user' : 'model',
-        parts: [{ text: msg.text }] // حالياً نركز على النص في التاريخ لتوفير التوكنز
+      .filter(
+        (msg) =>
+          (msg.sender === Sender.USER || msg.sender === Sender.AGENT) &&
+          msg.text &&
+          msg.text.trim() !== ""
+      )
+      .slice(-10)
+      .map((msg) => ({
+        role: msg.sender === Sender.USER ? "user" : "model",
+        parts: [{ text: msg.text }],
       }));
 
-    // 2. إنشاء الجلسة مع التاريخ
     const chat = createChatSession(systemInstruction, history);
-    
-    let messageContent: string | Part[];
-    
-    // 3. تجهيز الرسالة الحالية
+
+    // تجهيز الرسالة الحالية
+    let parts: Part[] = [{ text }];
+
     if (imageBase64) {
-      const cleanBase64 = imageBase64.split(',')[1] || imageBase64;
-      messageContent = [
-        { text: text },
-        {
-          inlineData: {
-            mimeType: mimeType,
-            data: cleanBase64
-          }
-        }
-      ];
-    } else {
-      messageContent = text;
+      const clean = imageBase64.split(",")[1] || imageBase64;
+      parts.push({
+        inlineData: {
+          mimeType,
+          data: clean,
+        },
+      });
     }
 
-    const result: GenerateContentResponse = await chat.sendMessage({ message: messageContent });
-    return result.text || "المعذرة، ما فهمت عليك.";
+    // إرسال الرسالة
+    const result = await chat.generateContent({
+      contents: [
+        {
+          role: "user",
+          parts,
+        },
+      ],
+    });
+
+    const responseText = result.response.text();
+    return responseText || "المعذرة، ما فهمت عليك.";
   } catch (error: any) {
     console.error("Gemini API Error:", error);
-    
-    const isQuotaError = 
-      error.status === 429 || 
-      error.status === "RESOURCE_EXHAUSTED" ||
-      error.message?.includes('429') || 
-      error.message?.includes('quota') ||
-      error.error?.code === 429 ||
-      error.error?.status === "RESOURCE_EXHAUSTED";
 
-    if (isQuotaError) {
-      return "QUOTA_EXCEEDED";
-    }
+    const isQuotaError =
+      error?.status === 429 ||
+      error?.status === "RESOURCE_EXHAUSTED" ||
+      error?.message?.includes("429") ||
+      error?.message?.includes("quota");
+
+    if (isQuotaError) return "QUOTA_EXCEEDED";
 
     return "آسف، فيه ضغط بسيط على الشبكة، ثواني وأرد عليك.";
   }
 };
 
+/* -----------------------------------------------------------
+   3) تحويل الملفات إلى Base64
+----------------------------------------------------------- */
 export const fileToBase64 = (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -87,48 +104,47 @@ export const fileToBase64 = (file: File): Promise<string> => {
   });
 };
 
-/**
- * Learning Function (Enhanced)
- * Analyzes the Owner's reply to capture FACT + STYLE.
- */
+/* -----------------------------------------------------------
+   4) AI Learning — تعلم أسلوب الرد من صاحب المحل
+----------------------------------------------------------- */
 export const learnFromInteraction = async (
-    userQuestion: string,
-    ownerReply: string
+  userQuestion: string,
+  ownerReply: string
 ): Promise<string | null> => {
-    try {
-        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-        
-        const prompt = `
+  try {
+    const ai = new GoogleGenerativeAI(process.env.API_KEY!);
+
+    const model = ai.getGenerativeModel({
+      model: MODEL_NAME,
+    });
+
+    const prompt = `
         You are an AI Apprentice learning from a Master Salesman (The Owner).
-        
+
         Context:
         - Customer Asked: "${userQuestion}"
         - Owner Replied: "${ownerReply}"
 
-        Task: 
+        Task:
         Create a "Golden Rule" for future responses based on this interaction.
-        Don't just extract facts. Capture the *Way* the owner answered, but fix any small typos or roughness without losing the dialect/vibe.
+        Capture the owner's style, dialect, and tone — but improve small typos.
 
-        If the reply contains a price, location, policy, or specific way of handling a request:
-        Output format in Arabic: "عند السؤال عن [Topic/Keywords]، الرد المعتمد هو: [Refined Owner Reply]"
+        Important:
+        - If the reply contains a price, rule, policy, or specific action:
+          Format output like:
+          "عند السؤال عن [Topic]، الرد المعتمد هو: [Refined Reply]"
+        - If ownerReply is too generic ("مرحبا"، "تمام"، "اوكي"):
+          return ONLY "NOTHING".
+    `;
 
-        If the reply is just a generic "Hello" or "Ok", return "NOTHING".
-        
-        Example Output: 
-        "عند السؤال عن السعر، الرد المعتمد هو: السعر 50 ريال شامل الضريبة يا غالي."
-        `;
+    const result = await model.generateContent(prompt);
+    const text = result.response.text()?.trim();
 
-        const result = await ai.models.generateContent({
-          model: MODEL_NAME,
-          contents: prompt
-        });
-        
-        const text = result.text?.trim();
+    if (!text || text.includes("NOTHING")) return null;
 
-        if (!text || text.includes("NOTHING")) return null;
-        return text;
-    } catch (error) {
-        console.error("Learning Error:", error);
-        return null;
-    }
+    return text;
+  } catch (error) {
+    console.error("Learning Error:", error);
+    return null;
+  }
 };
