@@ -1,10 +1,11 @@
-
-
-
-import { collection, query, where, getDocs, doc, updateDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../../../services/firebaseConfig';
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { GENERATE_SYSTEM_INSTRUCTION } from '../../../constants';
+
+export const config = {
+  runtime: "edge",
+};
 
 export default async function handler(request: Request) {
   const url = new URL(request.url);
@@ -28,10 +29,9 @@ export default async function handler(request: Request) {
 
       if (body.object === 'instagram') {
         for (const entry of body.entry) {
-          // Iterate over messaging events
           if (entry.messaging) {
             for (const event of entry.messaging) {
-               await processInstagramEvent(event);
+              await processInstagramEvent(event);
             }
           }
         }
@@ -48,14 +48,17 @@ export default async function handler(request: Request) {
   return new Response('Method Not Allowed', { status: 405 });
 }
 
+/* ----------------------------------------------
+    Process Event from Instagram
+---------------------------------------------- */
 async function processInstagramEvent(event: any) {
   const senderId = event.sender.id;
-  const recipientId = event.recipient.id; // This is the Instagram Business ID (Our Bot)
+  const recipientId = event.recipient.id; 
   const messageText = event.message?.text;
 
-  if (!messageText) return; // Ignore non-text messages for now
+  if (!messageText) return;
 
-  // 1. Find the Bot responsible for this Instagram Business Account
+  // 1. Find bot for this Instagram Business Account
   const botsRef = collection(db, 'bots');
   const q = query(botsRef, where('instagramBusinessId', '==', recipientId));
   const querySnapshot = await getDocs(q);
@@ -74,45 +77,62 @@ async function processInstagramEvent(event: any) {
   }
 
   // 2. Generate Gemini Response
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  
-  // Construct system instruction
-  // Passing -1 to simulate fresh turn or continuous depending on design
+  const ai = new GoogleGenerativeAI(process.env.API_KEY!);
+  const model = ai.getGenerativeModel({
+    model: "gemini-2.5-flash",
+  });
+
   const systemInstruction = GENERATE_SYSTEM_INSTRUCTION(bot, "", undefined, -1);
 
   try {
-    const result = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: messageText,
-      config: {
-        systemInstruction: systemInstruction,
-      }
+    const result = await model.generateContent({
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: messageText }],
+        },
+      ],
+      systemInstruction,
     });
 
-    const responseText = result.text;
+    const responseText = result.response.text();
     if (!responseText) return;
 
-    // 3. Send Response back to Instagram via Graph API
-    await sendInstagramMessage(recipientId, senderId, responseText, bot.instagramAccessToken);
+    // 3. Send Response back to Instagram
+    await sendInstagramMessage(
+      recipientId,
+      senderId,
+      responseText,
+      bot.instagramAccessToken
+    );
 
   } catch (error) {
     console.error("Gemini/Graph API Error:", error);
   }
 }
 
-async function sendInstagramMessage(businessId: string, recipientId: string, text: string, accessToken: string) {
+/* ----------------------------------------------
+    Send message to Instagram API
+---------------------------------------------- */
+async function sendInstagramMessage(
+  businessId: string,
+  recipientId: string,
+  text: string,
+  accessToken: string
+) {
   const url = `https://graph.facebook.com/v21.0/${businessId}/messages`;
-  
+
   const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${accessToken}`
     },
     body: JSON.stringify({
+      messaging_type: "RESPONSE",
       recipient: { id: recipientId },
-      message: { text: text }
-    })
+      message: { text },
+      access_token: accessToken,
+    }),
   });
 
   const data = await response.json();
