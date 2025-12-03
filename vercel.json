@@ -1,18 +1,13 @@
 {
   "functions": {
-    "api/**/*.{js,ts}": {
-      "runtime": "nodejs18.x",
-      "maxDuration": 60
+    "api/**/*.ts": {
+      "runtime": "nodejs18.x"
     }
   },
-  "rewrites": [
+  "routes": [
     {
-      "source": "/api/(.*)",
-      "destination": "/api/$1"
-    },
-    {
-      "source": "/(.*)",
-      "destination": "/index.html"
+      "src": "/api/(.*)",
+      "dest": "/api/$1"
     }
   ]
 }
