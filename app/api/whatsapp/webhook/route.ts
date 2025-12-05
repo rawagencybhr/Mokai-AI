@@ -2,7 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
-import { ai, MODEL_NAME } from '@/lib/gemini';
+import { getModel, MODEL_NAME } from '@/lib/gemini';
 import { sendWhatsAppMessage } from '@/lib/meta';
 import { GENERATE_SYSTEM_INSTRUCTION } from '@/constants';
 import { BotConfig } from '@/types';
@@ -77,15 +77,9 @@ async function processWhatsAppMessage(message: any, phoneNumberId: string) {
   const systemInstruction = GENERATE_SYSTEM_INSTRUCTION(bot, "", undefined, -1);
   
   try {
-    const result = await ai.models.generateContent({
-      model: MODEL_NAME,
-      contents: messageText,
-      config: {
-        systemInstruction: systemInstruction,
-      }
-    });
-
-    const replyText = result.text;
+    const model = getModel(systemInstruction);
+    const result = await model.generateContent(messageText);
+    const replyText = result.response.text();
     if (!replyText) return;
 
     // 3. Send Reply via WhatsApp API

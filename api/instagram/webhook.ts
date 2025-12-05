@@ -3,7 +3,7 @@
 
 import { collection, query, where, getDocs, doc, updateDoc } from 'firebase/firestore';
 import { db } from '../../../services/firebaseConfig';
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { GENERATE_SYSTEM_INSTRUCTION } from '../../../constants';
 
 export default async function handler(request: Request) {
@@ -74,22 +74,16 @@ async function processInstagramEvent(event: any) {
   }
 
   // 2. Generate Gemini Response
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY || process.env.NEXT_PUBLIC_GOOGLE_API_KEY || process.env.API_KEY || "DUMMY_KEY");
   
   // Construct system instruction
   // Passing -1 to simulate fresh turn or continuous depending on design
   const systemInstruction = GENERATE_SYSTEM_INSTRUCTION(bot, "", undefined, -1);
 
   try {
-    const result = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: messageText,
-      config: {
-        systemInstruction: systemInstruction,
-      }
-    });
-
-    const responseText = result.text;
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash', systemInstruction });
+    const result = await model.generateContent(messageText);
+    const responseText = result.response.text();
     if (!responseText) return;
 
     // 3. Send Response back to Instagram via Graph API
