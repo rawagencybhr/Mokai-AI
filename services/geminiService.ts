@@ -12,9 +12,12 @@ export const createChatSession = (systemInstruction: string, history: any[] = []
   if (!apiKey) throw new Error("API Key not found. Please set GOOGLE_API_KEY.");
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: MODEL_NAME, systemInstruction });
+  const model = genAI.getGenerativeModel({ model: MODEL_NAME });
   const chat = model.startChat({
-    history,
+    history: [
+      { role: 'user', parts: [{ text: systemInstruction }] },
+      ...history
+    ],
     generationConfig: {
       temperature: 0.7,
       topK: 40,

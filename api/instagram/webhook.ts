@@ -2,9 +2,9 @@
 
 
 import { collection, query, where, getDocs, doc, updateDoc } from 'firebase/firestore';
-import { db } from '../../../services/firebaseConfig';
+import { db } from '@/lib/firebase';
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { GENERATE_SYSTEM_INSTRUCTION } from '../../../constants';
+import { GENERATE_SYSTEM_INSTRUCTION } from '@/constants';
 
 export default async function handler(request: Request) {
   const url = new URL(request.url);
@@ -81,8 +81,11 @@ async function processInstagramEvent(event: any) {
   const systemInstruction = GENERATE_SYSTEM_INSTRUCTION(bot, "", undefined, -1);
 
   try {
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash', systemInstruction });
-    const result = await model.generateContent(messageText);
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    const result = await model.generateContent([
+      { text: systemInstruction },
+      { text: messageText }
+    ]);
     const responseText = result.response.text();
     if (!responseText) return;
 

@@ -2,7 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
-import { ai, MODEL_NAME } from '@/lib/gemini';
+import { getModel, MODEL_NAME } from '@/lib/gemini';
 import { sendInstagramMessage } from '@/lib/meta';
 import { GENERATE_SYSTEM_INSTRUCTION } from '@/constants';
 import { BotConfig } from '@/types';
@@ -76,15 +76,12 @@ async function processInstagramEvent(event: any) {
   const systemInstruction = GENERATE_SYSTEM_INSTRUCTION(bot, "", undefined, -1);
   
   try {
-    const result = await ai.models.generateContent({
-      model: MODEL_NAME,
-      contents: messageText,
-      config: {
-        systemInstruction: systemInstruction,
-      }
-    });
-
-    const replyText = result.text;
+    const model = getModel();
+    const result = await model.generateContent([
+      { text: systemInstruction },
+      { text: messageText }
+    ]);
+    const replyText = result.response.text();
     if (!replyText) return;
 
     // 3. Send Reply

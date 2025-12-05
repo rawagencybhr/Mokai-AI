@@ -64,8 +64,11 @@ async function processInstagramEvent(event: any) {
   const systemInstruction = GENERATE_SYSTEM_INSTRUCTION(bot, "", undefined, -1);
   
   try {
-    const model = getModel(systemInstruction);
-    const result = await model.generateContent(messageText);
+    const model = getModel();
+    const result = await model.generateContent([
+      { text: systemInstruction },
+      { text: messageText }
+    ]);
     const replyText = result.response.text();
     if (!replyText) return;
 
