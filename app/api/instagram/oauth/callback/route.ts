@@ -13,20 +13,21 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "Missing code or state" }, { status: 400 });
     }
 
-    // ❗ استخدم رابط ثابت 100% وليس url.origin
+    // ثابت – يجب أن يتطابق 100%
     const redirectUri = "https://mokai-ai.vercel.app/api/instagram/oauth/callback";
 
     const appId = process.env.FACEBOOK_APP_ID!;
     const appSecret = process.env.FACEBOOK_APP_SECRET!;
 
-    // 1) تبادل code → access_token
-    const tokenRes = await fetch(
-      `https://graph.facebook.com/v21.0/oauth/access_token?` +
-        `client_id=${appId}&client_secret=${appSecret}` +
-        `&redirect_uri=${encodeURIComponent(redirectUri)}` +
-        `&code=${code}`
-    );
+    // ---- 1) تبادل الكود مع التوكن ----
+    const tokenUrl =
+      "https://graph.facebook.com/v21.0/oauth/access_token" +
+      "?client_id=" + appId +
+      "&client_secret=" + appSecret +
+      "&redirect_uri=" + encodeURIComponent(redirectUri) +
+      "&code=" + code;
 
+    const tokenRes = await fetch(tokenUrl);
     const tokenData = await tokenRes.json();
 
     if (!tokenData.access_token) {
@@ -38,20 +39,16 @@ export async function GET(request: Request) {
 
     const userToken = tokenData.access_token;
 
-    // 2) الحصول على الصفحات (يحتاج user_token)
-    const pagesRes = await fetch(
-      `https://graph.facebook.com/v21.0/me/accounts?fields=id,name,access_token,instagram_business_account&access_token=${userToken}`
-    );
+    // ---- 2) الحصول على الصفحات ----
+    const pagesUrl =
+      "https://graph.facebook.com/v21.0/me/accounts" +
+      "?fields=id,name,access_token,instagram_business_account" +
+      "&access_token=" + userToken;
 
+    const pagesRes = await fetch(pagesUrl);
     const pagesData = await pagesRes.json();
 
-    if (!pagesData.data || pagesData.data.length === 0) {
-      return NextResponse.json({ error: "No pages available" }, { status: 404 });
-    }
-
-    // 3) إيجاد الصفحة المرتبطة بإنستغرام
-    const page = pagesData.data.find((p: any) => p.instagram_business_account);
-
+    const page = pagesData.data?.find((p: any) => p.instagram_business_account);
     if (!page) {
       return NextResponse.json({ error: "No Instagram business page found" }, { status: 404 });
     }
@@ -59,11 +56,13 @@ export async function GET(request: Request) {
     const pageToken = page.access_token;
     const igId = page.instagram_business_account.id;
 
-    // 4) الحصول على معلومات حساب الإنستغرام
-    const igRes = await fetch(
-      `https://graph.facebook.com/v21.0/${igId}?fields=username&access_token=${pageToken}`
-    );
+    // ---- 3) جلب معلومات حساب إنستغرام ----
+    const igUrl =
+      "https://graph.facebook.com/v21.0/" + igId +
+      "?fields=username" +
+      "&access_token=" + pageToken;
 
+    const igRes = await fetch(igUrl);
     const igData = await igRes.json();
 
     if (!igData.username) {
@@ -73,7 +72,7 @@ export async function GET(request: Request) {
       );
     }
 
-    // 5) حفظ البيانات في قاعدة البيانات
+    // ---- 4) حفظ البيانات ----
     await updateDoc(doc(db, "bots", botId), {
       instagramConnected: true,
       instagramUsername: igData.username,
@@ -83,7 +82,8 @@ export async function GET(request: Request) {
       connectedAt: new Date().toISOString(),
     });
 
-    return NextResponse.redirect(`${url.origin}/?success=true`);
+    return NextResponse.redirect(url.origin + "/?success=true");
+
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
