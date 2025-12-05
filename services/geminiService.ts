@@ -1,28 +1,27 @@
 
-import { GoogleGenAI, Chat, GenerateContentResponse, Part, Content } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { MODEL_NAME } from "@/constants";
 import { Message, Sender } from "@/types";
 
-// Retrieve API key with support for Client-Side env vars in Next.js
 const getApiKey = () => {
-    return process.env.NEXT_PUBLIC_API_KEY || process.env.API_KEY;
+    return process.env.GOOGLE_API_KEY || process.env.NEXT_PUBLIC_GOOGLE_API_KEY;
 };
 
-export const createChatSession = (systemInstruction: string, history: Content[] = []): Chat => {
+export const createChatSession = (systemInstruction: string, history: any[] = []): any => {
   const apiKey = getApiKey();
-  if (!apiKey) throw new Error("API Key not found. Please set NEXT_PUBLIC_API_KEY.");
-  
-  const ai = new GoogleGenAI({ apiKey: apiKey });
-  return ai.chats.create({
-    model: MODEL_NAME,
-    config: {
-      systemInstruction: systemInstruction,
+  if (!apiKey) throw new Error("API Key not found. Please set GOOGLE_API_KEY.");
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({ model: MODEL_NAME, systemInstruction });
+  const chat = model.startChat({
+    history,
+    generationConfig: {
       temperature: 0.7,
       topK: 40,
       topP: 0.95,
     },
-    history: history
   });
+  return chat;
 };
 
 export const sendMessageToGemini = async (
@@ -34,7 +33,7 @@ export const sendMessageToGemini = async (
 ): Promise<string> => {
   try {
     // Filter history to only include valid user/agent messages
-    const history: Content[] = previousMessages
+    const history = previousMessages
       .filter(msg => (msg.sender === Sender.USER || msg.sender === Sender.AGENT) && msg.text && msg.text.trim() !== "")
       .slice(-10) // Limit context window
       .map(msg => ({
@@ -44,7 +43,7 @@ export const sendMessageToGemini = async (
 
     const chat = createChatSession(systemInstruction, history);
     
-    let messageContent: string | Part[];
+    let messageContent: any;
     
     if (imageBase64) {
       // Remove data URL prefix if present
@@ -62,8 +61,8 @@ export const sendMessageToGemini = async (
       messageContent = text;
     }
 
-    const result: GenerateContentResponse = await chat.sendMessage({ message: messageContent });
-    return result.text || "المعذرة، ما فهمت عليك.";
+    const result = await chat.sendMessage(messageContent);
+    return result.response.text() || "المعذرة، ما فهمت عليك.";
   } catch (error: any) {
     console.error("Gemini API Error:", error);
     if (error.status === 429 || error.message?.includes('429')) {
@@ -90,7 +89,7 @@ export const learnFromInteraction = async (
         const apiKey = getApiKey();
         if (!apiKey) return null;
         
-        const ai = new GoogleGenAI({ apiKey: apiKey });
+        const genAI = new GoogleGenerativeAI(apiKey);
         
         const prompt = `
         You are an AI Apprentice learning from a Master Salesman.
@@ -100,12 +99,10 @@ export const learnFromInteraction = async (
         If generic, return "NOTHING".
         `;
 
-        const result = await ai.models.generateContent({
-          model: MODEL_NAME,
-          contents: prompt
-        });
+        const model = genAI.getGenerativeModel({ model: MODEL_NAME });
+        const result = await model.generateContent(prompt);
         
-        const text = result.text?.trim();
+        const text = result.response.text()?.trim();
         if (!text || text.includes("NOTHING")) return null;
         return text;
     } catch (error) {
