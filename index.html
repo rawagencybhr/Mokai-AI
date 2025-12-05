@@ -4,15 +4,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>RAWBOT - Smart Assistant Platform</title>
-    <!-- Tailwind CSS (CDN kept for simplicity to avoid huge file changes, typically we'd use postcss in prod) -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="/js/tailwind-config.js"></script>
+    <!-- Tailwind CSS removed CDN; local Tailwind used via Next.js build -->
     <!-- Adding Tajawal font for better Arabic aesthetics -->
     <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700&display=swap" rel="stylesheet">
     
-    <!-- Client-side File Processing Libraries (Keeping as globals to match existing service logic) -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+    <!-- Removed external libraries; using npm imports internally -->
     
     <style>
       body {
@@ -36,7 +32,7 @@
         background: #64748b; /* Slate 500 */
       }
     </style>
-  <script type="importmap" src="/importmap.json"></script>
+  
 <link rel="stylesheet" href="/index.css">
 </head>
   <body>

@@ -1,8 +1,5 @@
-
-// @ts-ignore
-declare const XLSX: any;
-// @ts-ignore
-declare const mammoth: any;
+import * as XLSX from 'xlsx';
+import * as mammoth from 'mammoth';
 
 export interface FileProcessingResult {
   fileName: string;
