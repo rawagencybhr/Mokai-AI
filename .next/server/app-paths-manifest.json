@@ -1,4 +1,4 @@
 {
   "/dashboard/page": "app/dashboard/page.js",
-  "/api/instagram/oauth/start/route": "app/api/instagram/oauth/start/route.js"
+  "/api/instagram/webhook/verify/route": "app/api/instagram/webhook/verify/route.js"
 }
