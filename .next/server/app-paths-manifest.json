@@ -1,4 +1,12 @@
 {
+  "/_not-found/page": "app/_not-found/page.js",
+  "/api/instagram/oauth/callback/route": "app/api/instagram/oauth/callback/route.js",
+  "/api/instagram/oauth/start/route": "app/api/instagram/oauth/start/route.js",
+  "/api/instagram/verify/route": "app/api/instagram/verify/route.js",
+  "/api/instagram/webhook/route": "app/api/instagram/webhook/route.js",
+  "/api/whatsapp/oauth/callback/route": "app/api/whatsapp/oauth/callback/route.js",
+  "/api/whatsapp/oauth/start/route": "app/api/whatsapp/oauth/start/route.js",
+  "/api/whatsapp/webhook/route": "app/api/whatsapp/webhook/route.js",
   "/dashboard/page": "app/dashboard/page.js",
-  "/api/instagram/webhook/verify/route": "app/api/instagram/webhook/verify/route.js"
+  "/page": "app/page.js"
 }
