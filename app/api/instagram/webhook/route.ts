@@ -1,109 +1,106 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { collection, query, where, getDocs, or } from 'firebase/firestore';
+import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { getModel } from '@/lib/gemini';
 import { sendInstagramMessage } from '@/lib/meta';
 import { GENERATE_SYSTEM_INSTRUCTION } from '@/constants';
 import { BotConfig } from '@/types';
 
-// GET - Verify Webhook
+// ==============================
+// VERIFY WEBHOOK (GET)
+// ==============================
 export async function GET(req: NextRequest) {
-  const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN;
-  const { searchParams } = new URL(req.url);
-  const mode = searchParams.get('hub.mode');
-  const token = searchParams.get('hub.verify_token');
-  const challenge = searchParams.get('hub.challenge');
+  try {
+    const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN;
+    const url = new URL(req.url);
 
-  if (mode === 'subscribe' && token === VERIFY_TOKEN) {
-    return new NextResponse(challenge || '', { status: 200 });
+    const mode = url.searchParams.get("hub.mode");
+    const token = url.searchParams.get("hub.verify_token");
+    const challenge = url.searchParams.get("hub.challenge");
+
+    if (mode === "subscribe" && token === VERIFY_TOKEN) {
+      return new NextResponse(challenge, { status: 200 });
+    }
+
+    return new NextResponse("Verification failed", { status: 403 });
+  } catch (err) {
+    console.error("Webhook GET Error:", err);
+    return new NextResponse("Server Error", { status: 500 });
   }
-  return new NextResponse('Error validating token', { status: 403 });
 }
 
-// POST - Handle Events
+// ==============================
+// RECEIVE EVENTS (POST)
+// ==============================
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    console.log("📩 Webhook Received:", JSON.stringify(body, null, 2));
+    console.log("📩 IG Webhook:", JSON.stringify(body, null, 2));
 
-    if (body.object === 'instagram') {
+    if (body.object === "instagram") {
       for (const entry of body.entry) {
-        if (entry.messaging) {
-          for (const event of entry.messaging) {
-            await processInstagramEvent(event);
-          }
+        if (!entry.messaging) continue;
+
+        for (const event of entry.messaging) {
+          await processInstagramEvent(event);
         }
       }
-      return new NextResponse('EVENT_RECEIVED', { status: 200 });
     }
 
-    return new NextResponse('Not Found', { status: 404 });
+    return new NextResponse("EVENT_RECEIVED", { status: 200 });
+
   } catch (error) {
-    console.error('Webhook Error:', error);
-    return new NextResponse('Internal Error', { status: 500 });
+    console.error("Webhook POST Error:", error);
+    return new NextResponse("Internal Error", { status: 500 });
   }
 }
 
+// ==============================
+// PROCESS EVENT
+// ==============================
 async function processInstagramEvent(event: any) {
   const senderId = event.sender?.id;
-  const businessId = event.recipient?.id;
+  const recipientId = event.recipient?.id; // Instagram Business ID
   const messageText = event.message?.text;
 
-  if (!messageText) return;
+  if (!senderId || !recipientId || !messageText) return;
 
-  console.log("📥 Instagram Message Received:", messageText);
-
-  // ---------- 1) FIND THE BOT ----------
+  // 1) Locate Bot
   const botsRef = collection(db, 'bots');
+  const q = query(botsRef, where('instagramBusinessId', '==', recipientId));
+  const snapshot = await getDocs(q);
 
-  const q = query(
-    botsRef,
-    or(
-      where('instagramBusinessId', '==', businessId),
-      where('instagramUserId', '==', businessId)
-    )
-  );
-
-  const botSnap = await getDocs(q);
-
-  if (botSnap.empty) {
-    console.log("⚠️ No bot found for business ID:", businessId);
+  if (snapshot.empty) {
+    console.warn("⚠️ No bot found for:", recipientId);
     return;
   }
 
-  const bot = botSnap.docs[0].data() as BotConfig;
+  const botData = snapshot.docs[0].data() as BotConfig;
+  if (!botData.isActive) return;
 
-  if (!bot.isActive) {
-    console.log("⏸ Bot is inactive:", businessId);
-    return;
-  }
+  // 2) Generate reply
+  const instruction = GENERATE_SYSTEM_INSTRUCTION(botData, "", undefined, -1);
 
-  // ---------- 2) GENERATE AI REPLY ----------
+  let reply = "شكراً لتواصلك 🌟";
+
   try {
-    const systemInstruction = GENERATE_SYSTEM_INSTRUCTION(bot, "", undefined, -1);
-
     const model = getModel();
     const result = await model.generateContent([
-      { text: systemInstruction },
+      { text: instruction },
       { text: messageText }
     ]);
+    reply = result.response.text() || reply;
+  } catch (err) {
+    console.error("Gemini Error:", err);
+  }
 
-    const replyText = result.response.text();
-    if (!replyText) return;
-
-    console.log("🤖 AI Reply:", replyText);
-
-    // ---------- 3) SEND INSTAGRAM MESSAGE ----------
+  // 3) Send reply
+  if (botData.instagramAccessToken) {
     await sendInstagramMessage(
-      businessId,
+      botData.instagramBusinessId!,
       senderId,
-      replyText,
-      bot.instagramAccessToken!
+      reply,
+      botData.instagramAccessToken
     );
-
-    console.log("✅ Reply Sent Successfully");
-
-  } catch (error) {
-    console.error("Gemini Error:", error);
   }
 }
