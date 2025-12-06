@@ -1,12 +1,12 @@
 export async function sendInstagramMessage(
-  pageId: string,       // IMPORTANT: must be PAGE ID, not business ID
+  pageId: string,       // MUST be PAGE ID
   recipientId: string,
   text: string,
   accessToken: string
 ) {
   const url = `https://graph.facebook.com/v21.0/${pageId}/messages`;
 
-  console.log("📤 Sending IG Message (Fixed)", {
+  console.log("📤 Sending IG Message", {
     pageId,
     recipientId,
     text,
@@ -17,28 +17,23 @@ export async function sendInstagramMessage(
     messaging_type: "RESPONSE",
     recipient: { id: recipientId },
     message: { text },
-    access_token: accessToken   // REQUIRED — token must be inside body, not header
+    access_token: accessToken // token MUST be inside body
   };
 
-  try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
 
-    const data = await response.json();
+  const data = await response.json();
 
-    if (data.error) {
-      console.error("❌ IG API Error:", data.error);
-      throw new Error(data.error.message);
-    }
-
-    return data;
-  } catch (err) {
-    console.error("❌ Network IG Error:", err);
-    throw err;
+  if (data.error) {
+    console.error("❌ IG API Error:", data.error);
+    throw new Error(data.error.message);
   }
+
+  return data;
 }
