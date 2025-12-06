@@ -1,21 +1,23 @@
 export async function sendInstagramMessage(
-  businessId: string,
+  pageId: string,       // IMPORTANT: must be PAGE ID, not business ID
   recipientId: string,
   text: string,
   accessToken: string
 ) {
-  const url = `https://graph.facebook.com/v21.0/${businessId}/messages`;
+  const url = `https://graph.facebook.com/v21.0/${pageId}/messages`;
 
-  console.log("📤 Sending IG Message", {
-    businessId,
+  console.log("📤 Sending IG Message (Fixed)", {
+    pageId,
     recipientId,
     text,
     hasToken: !!accessToken
   });
 
   const payload = {
+    messaging_type: "RESPONSE",
     recipient: { id: recipientId },
-    message: { text }
+    message: { text },
+    access_token: accessToken   // REQUIRED — token must be inside body, not header
   };
 
   try {
@@ -23,7 +25,6 @@ export async function sendInstagramMessage(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify(payload),
     });
