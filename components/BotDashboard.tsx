@@ -182,11 +182,20 @@ export const BotDashboard: React.FC<BotDashboardProps> = ({
      const height = 800;
      const left = window.screen.width / 2 - width / 2;
      const top = window.screen.height / 2 - height / 2;
-     window.open(`/?botId=${bot.id}`, `ClientApp-${bot.id}`, `width=${width},height=${height},top=${top},left=${left},resizable=yes,scrollbars=yes`);
+     window.open(`/dashboard?botId=${bot.id}`, `ClientApp-${bot.id}`, `width=${width},height=${height},top=${top},left=${left},resizable=yes,scrollbars=yes`);
   };
 
   const copyLicense = (key: string) => {
       navigator.clipboard.writeText(key);
+  };
+
+  const getClientLink = (id: number) => {
+     const origin = typeof window !== 'undefined' ? window.location.origin : '';
+     return `${origin}/dashboard?botId=${id}`;
+  };
+
+  const copyClientLink = (id: number) => {
+     navigator.clipboard.writeText(getClientLink(id));
   };
 
   // Filter Bots
@@ -299,6 +308,34 @@ export const BotDashboard: React.FC<BotDashboardProps> = ({
                    </div>
                 </div>
 
+                {/* Client Link Section */}
+                <div className="bg-slate-50 rounded-xl p-3 mb-6 flex items-center justify-between border border-slate-100 hover:border-slate-200 transition-colors">
+                   <div className={`flex flex-col ${isRTL ? 'items-start text-right' : 'items-start text-left'}`}>
+                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-0.5">{t('clientLink')}</p>
+                      <div className="flex items-center gap-2">
+                          <p className="text-sm font-mono text-slate-700 font-bold tracking-wide break-all">
+                            {getClientLink(bot.id)}
+                          </p>
+                      </div>
+                   </div>
+                   <div className="flex gap-1">
+                      <button 
+                         onClick={() => copyClientLink(bot.id)}
+                         className="text-slate-400 hover:text-cyan-600 p-1.5"
+                         title={t('copyLicense')}
+                      >
+                         <Copy size={16} />
+                      </button>
+                      <button 
+                         onClick={() => handleOpenClientPopup(bot)}
+                         className="text-cyan-500 hover:text-cyan-600 p-1.5"
+                         title={t('clientLink')}
+                      >
+                         <ExternalLink size={16} />
+                      </button>
+                   </div>
+                </div>
+
                 {/* Instagram Section */}
                 <div className="mb-4">
                    <div className="flex items-center gap-1.5 mb-2.5">
@@ -386,7 +423,7 @@ export const BotDashboard: React.FC<BotDashboardProps> = ({
                          <Ear size={18} />
                       </button>
                       <button 
-                        onClick={() => onLaunchClientApp(bot)} 
+                        onClick={() => handleOpenClientPopup(bot)} 
                         className="p-2 text-cyan-500 hover:bg-cyan-50 rounded-lg border border-cyan-100 hover:border-cyan-200 transition-colors"
                         title={t('clientLink')}
                       >
