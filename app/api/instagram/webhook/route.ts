@@ -118,22 +118,36 @@ async function processEvent(entryId: string, event: any) {
 
   console.log(`📨 Message from ${senderId} to ${igBusinessId}: ${messageText}`);
 
-  // ===================================================
-  // 4) FIND BOT BY INSTAGRAM BUSINESS ID
-  // ===================================================
-  const botsRef = collection(db, "bots");
-  // ✅ نبحث عن البوت الذي يملك هذا الـ instagramBusinessId
-  const botsSnapshot = await getDocs(
-    query(botsRef, where("instagramBusinessId", "==", igBusinessId))
+// ===================================================
+// 4) FIND BOT BY INSTAGRAM ID (BUSINESS OR PAGE)
+// ===================================================
+const botsRef = collection(db, "bots");
+
+// البحث بمحاولة رقم 1 — instagramBusinessId
+let botsSnapshot = await getDocs(
+  query(botsRef, where("instagramBusinessId", "==", igBusinessId))
+);
+
+// لو لم نجد أي بوت
+if (botsSnapshot.empty) {
+  console.log(`ℹ️ No bot under instagramBusinessId ${igBusinessId}, trying instagramPageId...`);
+
+  // محاولة رقم 2 — instagramPageId
+  botsSnapshot = await getDocs(
+    query(botsRef, where("instagramPageId", "==", igBusinessId))
   );
+}
 
-  if (botsSnapshot.empty) {
-    console.log(`⚠️ No bot found for IG Business ID: ${igBusinessId}. Check Firebase.`);
-    return;
-  }
+if (botsSnapshot.empty) {
+  console.log(`❌ No bot found for ANY ID: ${igBusinessId}.`);
+  return;
+}
 
-  const botDoc = botsSnapshot.docs[0];
-  const bot = botDoc.data() as BotConfig;
+console.log("✅ Bot found!");
+
+const botDoc = botsSnapshot.docs[0];
+const bot = botDoc.data() as BotConfig;
+
 
   if (!bot.isActive) {
     console.log("⚠️ Bot is inactive");
