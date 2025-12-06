@@ -13,66 +13,81 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "Missing code or state" }, { status: 400 });
     }
 
-    // ثابت – يجب أن يتطابق 100%
     const redirectUri = "https://mokai-ai.vercel.app/api/instagram/oauth/callback";
 
     const appId = process.env.FACEBOOK_APP_ID!;
     const appSecret = process.env.FACEBOOK_APP_SECRET!;
 
-    // ---- 1) تبادل الكود مع التوكن ----
+    //
+    // 1) EXCHANGE CODE → TOKEN
+    //
     const tokenUrl =
-      "https://graph.facebook.com/v21.0/oauth/access_token" +
-      "?client_id=" + appId +
-      "&client_secret=" + appSecret +
-      "&redirect_uri=" + encodeURIComponent(redirectUri) +
-      "&code=" + code;
+      `https://graph.facebook.com/v21.0/oauth/access_token?` +
+      `client_id=${appId}&client_secret=${appSecret}` +
+      `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+      `&code=${code}`;
 
     const tokenRes = await fetch(tokenUrl);
     const tokenData = await tokenRes.json();
 
+    console.log("🔵 STEP 1 TOKEN RESULT:", tokenData);
+
     if (!tokenData.access_token) {
       return NextResponse.json(
-        { error: "Failed to exchange code for access token", details: tokenData },
+        { error: "Failed to exchange code", details: tokenData },
         { status: 500 }
       );
     }
 
     const userToken = tokenData.access_token;
 
-    // ---- 2) الحصول على الصفحات ----
+    //
+    // 2) GET PAGES
+    //
     const pagesUrl =
-      "https://graph.facebook.com/v21.0/me/accounts" +
-      "?fields=id,name,access_token,instagram_business_account" +
-      "&access_token=" + userToken;
+      `https://graph.facebook.com/v21.0/me/accounts?fields=id,name,instagram_business_account,access_token&access_token=${userToken}`;
 
     const pagesRes = await fetch(pagesUrl);
     const pagesData = await pagesRes.json();
 
+    console.log("🟠 STEP 2 PAGES RESULT:", pagesData);
+
     const page = pagesData.data?.find((p: any) => p.instagram_business_account);
+
     if (!page) {
-      return NextResponse.json({ error: "No Instagram business page found" }, { status: 404 });
+      return NextResponse.json(
+        { 
+          error: "No Instagram business page found", 
+          pagesResult: pagesData 
+        },
+        { status: 404 }
+      );
     }
 
     const pageToken = page.access_token;
     const igId = page.instagram_business_account.id;
 
-    // ---- 3) جلب معلومات حساب إنستغرام ----
+    //
+    // 3) GET IG USERNAME
+    //
     const igUrl =
-      "https://graph.facebook.com/v21.0/" + igId +
-      "?fields=username" +
-      "&access_token=" + pageToken;
+      `https://graph.facebook.com/v21.0/${igId}?fields=username&access_token=${pageToken}`;
 
     const igRes = await fetch(igUrl);
     const igData = await igRes.json();
 
+    console.log("🟢 STEP 3 IG RESULT:", igData);
+
     if (!igData.username) {
       return NextResponse.json(
-        { error: "Could not fetch Instagram username", details: igData },
+        { error: "Could not fetch username", igData },
         { status: 500 }
       );
     }
 
-    // ---- 4) حفظ البيانات ----
+    //
+    // 4) SAVE TO FIREBASE
+    //
     await updateDoc(doc(db, "bots", botId), {
       instagramConnected: true,
       instagramUsername: igData.username,
@@ -82,9 +97,10 @@ export async function GET(request: Request) {
       connectedAt: new Date().toISOString(),
     });
 
-    return NextResponse.redirect(url.origin + "/?success=true");
+    return NextResponse.redirect("https://mokai-ai.vercel.app/dashboard?instagram=connected");
 
   } catch (err: any) {
+    console.error("❌ ERROR:", err);
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }
