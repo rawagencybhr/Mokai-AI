@@ -141,8 +141,10 @@ async function processEvent(entryId: string, event: any) {
     return;
   }
 
-  if (!bot.facebookPageId) {
-    console.log("❌ Missing facebookPageId — required in LIVE mode");
+  // Use instagramPageId from Firestore because it actually represents the FB Page ID
+  const pageIdToUse = bot.instagramPageId;
+  if (!pageIdToUse) {
+    console.log("❌ Missing instagramPageId — required for sending messages");
     return;
   }
 
@@ -179,10 +181,10 @@ async function processEvent(entryId: string, event: any) {
   // SEND IG REPLY — PRODUCTION (PAGE_ID IS REQUIRED)
   // ===================================================
   try {
-    console.log(`📤 Sending reply via PAGE ID: ${bot.facebookPageId}`);
+    console.log(`📤 Sending reply via PAGE ID: ${pageIdToUse}`);
 
     await sendInstagramMessage(
-      bot.facebookPageId,
+      pageIdToUse,
       senderId,
       replyText,
       bot.instagramAccessToken
