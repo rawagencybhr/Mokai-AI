@@ -10,7 +10,8 @@ export async function GET(req: NextRequest) {
   }
 
   const appId = process.env.FACEBOOK_APP_ID;
-  const redirectUri = `${new URL(req.url).origin}/api/whatsapp/oauth/callback`;
+  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || new URL(req.url).origin;
+  const redirectUri = `${baseUrl}/api/whatsapp/oauth/callback`;
   
   // Scope required for WhatsApp Business Cloud API
   const scope = 'whatsapp_business_management,whatsapp_business_messaging';

@@ -1,21 +1,20 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { doc, updateDoc } from "firebase/firestore";
 import { db } from "@/services/firebaseConfig";
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(request: Request) {
+export async function GET(req: NextRequest) {
   try {
-    const url = new URL(request.url);
-
-    const code = url.searchParams.get("code");
-    const botId = url.searchParams.get("state");
+    const { searchParams } = req.nextUrl;
+    const code = searchParams.get("code");
+    const botId = searchParams.get("state");
 
     if (!code || !botId) {
       return NextResponse.json({ error: "Missing code or state" }, { status: 400 });
     }
 
-    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || url.origin;
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || req.nextUrl.origin;
     const redirectUri = `${baseUrl}/api/instagram/oauth/callback`;
 
     const appId = process.env.FACEBOOK_APP_ID!;
