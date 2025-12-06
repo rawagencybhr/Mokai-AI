@@ -1,15 +1,17 @@
+// app/api/webhook/route.ts
+
 import { NextRequest, NextResponse } from "next/server";
 import { collection, query, where, getDocs } from "firebase/firestore";
 import { db } from "@/services/firebaseConfig";
 import { getModel } from "@/lib/gemini";
 import { GENERATE_SYSTEM_INSTRUCTION } from "@/constants";
-import { sendInstagramMessage } from "@/lib/meta";
+import { sendInstagramMessage } from "@/lib/meta"; // تأكد من المسار الصحيح
 import { BotConfig } from "@/types";
 
 export const dynamic = "force-dynamic";
 
 // ===================================================
-// 1) VERIFY WEBHOOK
+// 1) VERIFY WEBHOOK (GET)
 // ===================================================
 export async function GET(req: NextRequest) {
   const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN;
@@ -27,13 +29,14 @@ export async function GET(req: NextRequest) {
 }
 
 // ===================================================
-// 2) HANDLE INSTAGRAM EVENTS
+// 2) HANDLE INSTAGRAM EVENTS (POST)
 // ===================================================
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
 
-    console.log("📩 Instagram Webhook Event Received:\n", JSON.stringify(body, null, 2));
+    // طباعة خفيفة لتقليل الازدحام في اللوج، يمكنك تفعيل السطر التالي للفحص الكامل
+    // console.log("📩 Instagram Event:", JSON.stringify(body, null, 2));
 
     if (body.object !== "instagram") {
       return new NextResponse("Not Instagram Event", { status: 404 });
@@ -43,6 +46,7 @@ export async function POST(req: NextRequest) {
       if (!entry.messaging) continue;
 
       for (const msgEvent of entry.messaging) {
+        // نمرر entry.id أيضاً لأنه غالباً يمثل الحساب التجاري
         await processEvent(entry.id, msgEvent);
       }
     }
@@ -60,27 +64,33 @@ export async function POST(req: NextRequest) {
 // ===================================================
 async function processEvent(entryId: string, event: any) {
 
-  // ===================================================
-  // SKIP EVENTS THAT ARE NOT MESSAGES
-  // ===================================================
+  // ✅ تجاهل أحداث التعديل لتجنب أخطاء Missing Data
   if (event.message_edit) {
-    console.log("ℹ️ IG message_edit event ignored");
+    console.log("ℹ️ IG message_edit ignored");
     return;
   }
 
+  // ✅ تجاهل أحداث حذف الرسائل
   if (event.message_unsend) {
-    console.log("ℹ️ IG message_unsend event ignored");
+    console.log("ℹ️ IG message_unsend ignored");
     return;
   }
 
-  // Skip echo messages (bot replying to itself)
+  // ✅ تجاهل التفاعلات (القلوب واللايكات)
+  if (event.reaction) {
+    console.log("ℹ️ IG reaction ignored");
+    return;
+  }
+
+  // ✅ تجاهل رسائل الصدى (التي يرسلها البوت نفسه)
   if (event.message?.is_echo) {
-    console.log("ℹ️ Skipping echo event.");
     return;
   }
 
+  // استخراج المعرفات
   const senderId = event.sender?.id;
-  const igBusinessId = event.recipient?.id; // IG business ID (the receiving IG account)
+  // في إنستغرام، المستلم (recipient) هو الحساب التجاري (Business Account)
+  const igBusinessId = event.recipient?.id; 
 
   if (!senderId || !igBusinessId) {
     console.log("⚠️ Missing senderId or igBusinessId");
@@ -91,38 +101,34 @@ async function processEvent(entryId: string, event: any) {
   // EXTRACT MESSAGE CONTENT
   // ===================================================
   let messageText: string | null = null;
-  let imageUrl: string | null = null;
-
+  
+  // التعامل مع النصوص
   if (event.message?.text) {
     messageText = event.message.text;
   }
-
-  if (event.message?.attachments?.[0]?.payload?.url) {
-    imageUrl = event.message.attachments[0].payload.url;
+  // التعامل مع الصور (اختياري)
+  else if (event.message?.attachments?.[0]?.type === 'image') {
+    messageText = "User sent an image"; 
   }
 
-  if (!messageText && !imageUrl) {
-    console.log("⚠️ Unsupported message type — skipped");
+  if (!messageText) {
+    console.log("⚠️ Unsupported message type or empty text — skipped");
     return;
   }
 
-  console.log("📨 Incoming IG Message:", {
-    senderId,
-    igBusinessId,
-    messageText,
-    imageUrl
-  });
+  console.log(`📨 Message from ${senderId} to ${igBusinessId}: ${messageText}`);
 
   // ===================================================
   // 4) FIND BOT BY INSTAGRAM BUSINESS ID
   // ===================================================
   const botsRef = collection(db, "bots");
+  // ✅ نبحث عن البوت الذي يملك هذا الـ instagramBusinessId
   const botsSnapshot = await getDocs(
     query(botsRef, where("instagramBusinessId", "==", igBusinessId))
   );
 
   if (botsSnapshot.empty) {
-    console.log("⚠️ No bot found for IG Business ID:", igBusinessId);
+    console.log(`⚠️ No bot found for IG Business ID: ${igBusinessId}. Check Firebase.`);
     return;
   }
 
@@ -130,20 +136,18 @@ async function processEvent(entryId: string, event: any) {
   const bot = botDoc.data() as BotConfig;
 
   if (!bot.isActive) {
-    console.log("⚠️ Bot inactive");
+    console.log("⚠️ Bot is inactive");
     return;
   }
 
-  if (!bot.instagramAccessToken || !bot.facebookPageId) {
-    console.log("❌ Missing required IG credentials");
+  if (!bot.instagramAccessToken) {
+    console.log("❌ Missing instagramAccessToken in bot config");
     return;
   }
 
   // ===================================================
   // 5) AI RESOLUTION
   // ===================================================
-  const userInput = messageText || "User sent an image";
-
   let replyText = "";
 
   try {
@@ -152,7 +156,7 @@ async function processEvent(entryId: string, event: any) {
 
     const result = await model.generateContent([
       { text: systemInstruction },
-      { text: userInput }
+      { text: messageText }
     ]);
 
     replyText = result.response.text();
@@ -167,20 +171,17 @@ async function processEvent(entryId: string, event: any) {
     return;
   }
 
-  console.log("🤖 Generated Reply:", replyText);
-
   // ===================================================
   // 6) SEND IG REPLY
   // ===================================================
   try {
-    const sent = await sendInstagramMessage(
-      bot.facebookPageId,          // PAGE ID (required by Meta API)
-      senderId,                    // IG USER ID
-      replyText,                   // message
-      bot.instagramAccessToken     // PAGE ACCESS TOKEN
+    // ✅ تصحيح هام: نمرر igBusinessId (الذي يبدأ بـ 1784) وليس facebookPageId
+    await sendInstagramMessage(
+      igBusinessId,              // معرف الحساب الذي سيرسل الرد
+      senderId,                  // معرف المستخدم المستلم
+      replyText,                 // نص الرسالة
+      bot.instagramAccessToken   // توكن الوصول
     );
-
-    console.log("📤 IG Reply Sent:", sent);
 
   } catch (error) {
     console.error("❌ Failed sending IG reply:", error);
