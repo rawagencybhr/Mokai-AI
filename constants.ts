@@ -42,7 +42,7 @@ const getLanguageInstruction = (lang: BotLanguage) => {
 
 export const GENERATE_SYSTEM_INSTRUCTION = (
     bot: BotConfig, 
-    dynamicContext: string, 
+    dynamicContext: string = "", 
     userProfile?: UserProfile,
     timeSinceLastMsgHours: number = -1 // -1 means new session/first message
 ) => {

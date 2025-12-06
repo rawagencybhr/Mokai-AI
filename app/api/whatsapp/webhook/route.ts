@@ -149,7 +149,7 @@ async function processEvent(entryId: string, event: any) {
 
   try {
     const model = getModel();
-    const systemInstruction = GENERATE_SYSTEM_INSTRUCTION(bot);
+    const systemInstruction = GENERATE_SYSTEM_INSTRUCTION(bot, "", undefined, -1);
 
     const result = await model.generateContent([
       { text: systemInstruction },
@@ -169,11 +169,16 @@ async function processEvent(entryId: string, event: any) {
   }
 
   // ===================================================
-  // SEND REPLY (TEST MODE — USING igBusinessId)
+  // SEND REPLY (PRODUCTION MODE — USING PAGE ID)
   // ===================================================
   try {
+    if (!bot.instagramPageId) {
+      console.log("❌ Missing instagramPageId (required in LIVE mode)");
+      return;
+    }
+
     await sendInstagramMessage(
-      igBusinessId,            // ← كما تريد للتيست
+      bot.instagramPageId,
       senderId,
       replyText,
       bot.instagramAccessToken

@@ -64,7 +64,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             </div>
             
             <p className="text-sm text-gray-700 mb-3">
-              {pendingAction.type === 'HOT_LEAD' ? 'المساعد حول العميل لك للإغلاق.' : 'رسالة العميل:'} <span className="font-semibold">"{pendingAction.userMessage}"</span>
+              {pendingAction.type === 'HOT_LEAD' ? 'المساعد حول العميل لك للإغلاق.' : 'رسالة العميل:'} <span className="font-semibold">&quot;{pendingAction.userMessage}&quot;</span>
             </p>
             
             <div className="bg-white p-3 rounded-lg border border-gray-100 text-xs text-gray-600">
