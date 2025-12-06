@@ -168,11 +168,12 @@ async function processEvent(entryId: string, event: any) {
   // ===================================================
   try {
     const sent = await sendInstagramMessage(
-      igBusinessId,
-      senderId,
-      replyText,
-      bot.instagramAccessToken
-    );
+  bot.facebookPageId,   // ✔ يجب إرسال الرسالة باستخدام Facebook Page ID
+  senderId,
+  replyText,
+  bot.instagramAccessToken
+);
+
 
     console.log("📤 IG Reply Sent:", sent);
 
