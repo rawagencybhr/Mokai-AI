@@ -114,7 +114,9 @@ async function processEvent(entryId: string, event: any) {
   // 4) FIND BOT BY INSTAGRAM BUSINESS ID
   // ===================================================
   const botsRef = collection(db, "bots");
-  const botsSnapshot = await getDocs(query(botsRef, where("instagramPageId", "==", igBusinessId)));
+const botsSnapshot = await getDocs(
+  query(botsRef, where("instagramBusinessId", "==", igBusinessId))
+);
 
   if (botsSnapshot.empty) {
     console.log("⚠️ No bot found for IG Business ID:", igBusinessId);
