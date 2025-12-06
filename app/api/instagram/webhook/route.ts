@@ -81,7 +81,8 @@ async function processInstagramEvent(event: any) {
 
   // Lookup bot config in Firestore
   const botsRef = collection(db, "bots");
-  const q = query(botsRef, where("instagramBusinessId", "==", businessId));
+  // Match by PAGE ID (recipient.id). Callback stores both instagramPageId and instagramBusinessId.
+  const q = query(botsRef, where("instagramPageId", "==", businessId));
   const querySnapshot = await getDocs(q);
 
   if (querySnapshot.empty) {
