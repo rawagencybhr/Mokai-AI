@@ -6,10 +6,9 @@ import { GENERATE_SYSTEM_INSTRUCTION } from "@/constants";
 import { sendInstagramMessage } from "@/lib/meta";
 import { BotConfig } from "@/types";
 
-
-// ================================
+// ===================================================
 // 1) VERIFY WEBHOOK
-// ================================
+// ===================================================
 export async function GET(req: NextRequest) {
   const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN;
   const url = new URL(req.url);
@@ -25,11 +24,9 @@ export async function GET(req: NextRequest) {
   return new NextResponse("Invalid verify token", { status: 403 });
 }
 
-
-
-// ================================
-// 2) HANDLE INSTAGRAM WEBHOOK EVENTS
-// ================================
+// ===================================================
+// 2) HANDLE INSTAGRAM EVENTS
+// ===================================================
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -56,51 +53,46 @@ export async function POST(req: NextRequest) {
   }
 }
 
-
-
-// ================================
-// 3) PROCESS EACH INSTAGRAM MESSAGE
-// ================================
+// ===================================================
+// 3) PROCESS SINGLE INSTAGRAM EVENT
+// ===================================================
 async function processInstagramEvent(event: any) {
-  const isEcho = event.message?.is_echo === true;
-  if (isEcho) {
+  // Skip echo messages from IG
+  if (event.message?.is_echo) {
     console.log("ℹ️ Skipping echo message");
     return;
   }
 
-  const senderId = event.sender?.id || event.message?.from?.id || event.user?.id || null;
-  const pageId = event.recipient?.id || (event.recipient && (event.recipient as any).user_id) || null;
+  // Extract sender + page ID (VERY IMPORTANT)
+  const senderId = event.sender?.id;        // IG user ID
+  const pageId = event.recipient?.id;       // Page ID (used for reply)
 
-  let messageText: string | null =
+  // Extract message text
+  let messageText =
     event.message?.text ??
     event.message_edit?.text ??
-    event.postback?.payload ??
     null;
 
-  if (!messageText && Array.isArray(event.message?.attachments) && event.message.attachments.length > 0) {
-    messageText = "[ATTACHMENT]";
-  }
-
-  if (!messageText || !senderId || !pageId) {
-    console.log("⚠️ Missing sender/message/businessId", {
-      hasSender: !!senderId,
-      hasRecipient: !!pageId,
-      hasText: !!messageText,
-      eventKeys: Object.keys(event || {})
+  if (!senderId || !pageId || !messageText) {
+    console.log("⚠️ Missing data", {
+      senderId,
+      pageId,
+      messageText,
+      keys: Object.keys(event)
     });
     return;
   }
 
   console.log("📨 Incoming IG Message:", { senderId, pageId, messageText });
 
-
-  // Lookup bot config in Firestore by PAGE ID first, then fallback to business ID
+  // ===================================================
+  // 4) FIND BOT BY PAGE ID
+  // ===================================================
   const botsRef = collection(db, "bots");
-  let querySnapshot = await getDocs(query(botsRef, where("instagramPageId", "==", pageId)));
 
-  if (querySnapshot.empty) {
-    querySnapshot = await getDocs(query(botsRef, where("instagramBusinessId", "==", pageId)));
-  }
+  let querySnapshot = await getDocs(
+    query(botsRef, where("instagramPageId", "==", pageId))
+  );
 
   if (querySnapshot.empty) {
     console.log("⚠️ No bot found for pageId:", pageId);
@@ -111,52 +103,56 @@ async function processInstagramEvent(event: any) {
   const bot = botDoc.data() as BotConfig;
 
   if (!bot.isActive) {
-    console.log("⚠️ Bot is not active");
+    console.log("⚠️ Bot inactive");
     return;
   }
 
-  if (!bot.instagramPageId) {
-    console.log("❌ Bot missing instagramPageId — cannot send messages!");
+  if (!bot.instagramAccessToken) {
+    console.log("❌ Missing page access token!");
     return;
   }
 
-  // AI Reply using Gemini
-  const model = getModel();
+  // ===================================================
+  // 5) GENERATE AI REPLY
+  // ===================================================
   let replyText = "";
 
   try {
+    const model = getModel();
     const systemInstruction = GENERATE_SYSTEM_INSTRUCTION(bot, "", undefined, -1);
-    const response = await model.generateContent([
+
+    const result = await model.generateContent([
       { text: systemInstruction },
       { text: messageText }
     ]);
-    replyText = response.response.text();
 
+    replyText = result.response.text();
   } catch (err) {
     console.error("❌ Gemini Error:", err);
     return;
   }
 
   if (!replyText) {
-    console.log("⚠️ Gemini generated empty reply");
+    console.log("⚠️ Empty AI reply");
     return;
   }
 
   console.log("🤖 Generated Reply:", replyText);
 
-
-  // SEND MESSAGE BACK TO IG USER
+  // ===================================================
+  // 6) SEND MESSAGE BACK TO USER (THE MOST IMPORTANT PART)
+  // ===================================================
   try {
-    const result = await sendInstagramMessage(
-      bot.instagramPageId,   // ⬅️ MUST BE PAGE ID, NOT businessId
-      senderId,
+    const sendResult = await sendInstagramMessage(
+      bot.instagramPageId,          // MUST be page ID
+      senderId,                     // IG user
       replyText,
-      bot.instagramAccessToken!
+      bot.instagramAccessToken      // PAGE TOKEN
     );
 
-    console.log("📤 Instagram Send Result:", result);
+    console.log("📤 IG Reply Sent:", sendResult);
 
   } catch (err) {
-    console.error("❌ Sending IG Message Failed:", err);
+    console.error("❌ Failed to send reply:", err);
   }
 }
