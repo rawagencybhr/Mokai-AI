@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { doc, updateDoc } from "firebase/firestore";
 import { db } from "@/services/firebaseConfig";
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
@@ -13,7 +15,8 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "Missing code or state" }, { status: 400 });
     }
 
-    const redirectUri = "https://mokai-ai.vercel.app/api/instagram/oauth/callback";
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || url.origin;
+    const redirectUri = `${baseUrl}/api/instagram/oauth/callback`;
 
     const appId = process.env.FACEBOOK_APP_ID!;
     const appSecret = process.env.FACEBOOK_APP_SECRET!;
@@ -97,7 +100,7 @@ export async function GET(request: Request) {
       connectedAt: new Date().toISOString(),
     });
 
-    return NextResponse.redirect("https://mokai-ai.vercel.app/dashboard?instagram=connected");
+    return NextResponse.redirect(`${baseUrl}/dashboard?instagram=connected`);
 
   } catch (err: any) {
     console.error("❌ ERROR:", err);

@@ -144,7 +144,7 @@ async function processInstagramEvent(event: any) {
   // ===================================================
   try {
     const sendResult = await sendInstagramMessage(
-      bot.instagramPageId,          // MUST be page ID
+      pageId,          // MUST be page ID
       senderId,                     // IG user
       replyText,
       bot.instagramAccessToken      // PAGE TOKEN
