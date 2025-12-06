@@ -4,7 +4,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { collection, query, where, getDocs } from "firebase/firestore";
 import { db } from "@/services/firebaseConfig";
 import { getModel } from "@/lib/gemini";
-import { GENERATE_SYSTEM_INSTRUCTION } from "@/constants";
 import { sendInstagramMessage } from "@/lib/meta";
 import { BotConfig } from "@/types";
 
@@ -59,7 +58,6 @@ export async function POST(req: NextRequest) {
 // 3) PROCESS EVENT
 // ===================================================
 async function processEvent(entryId: string, event: any) {
-
   console.log("EVENT KEYS =>", Object.keys(event));
 
   // ===================================================
@@ -70,26 +68,9 @@ async function processEvent(entryId: string, event: any) {
     return;
   }
 
-  // IGNORE EDITS
-  if (event.message_edit) {
-    console.log("ℹ️ IG message_edit ignored");
-    return;
-  }
-
-  // IGNORE DELETES
-  if (event.message_unsend) {
-    console.log("ℹ️ IG message_unsend ignored");
-    return;
-  }
-
-  // IGNORE REACTIONS
-  if (event.reaction) {
-    console.log("ℹ️ IG reaction ignored");
-    return;
-  }
-
-  // IGNORE ECHOES
+  // IGNORE ECHOES (رسائل البوت نفسه)
   if (event.message?.is_echo) {
+    console.log("ℹ️ Echo message ignored");
     return;
   }
 
@@ -111,9 +92,8 @@ async function processEvent(entryId: string, event: any) {
 
   if (event.message?.text) {
     messageText = event.message.text;
-  } 
-  else if (event.message?.attachments?.[0]?.type === "image") {
-    messageText = "User sent an image";
+  } else if (event.message?.attachments?.[0]?.type === "image") {
+    messageText = "📷 تم استلام صورة من العميل.";
   }
 
   if (!messageText) {
@@ -159,18 +139,26 @@ async function processEvent(entryId: string, event: any) {
     return;
   }
 
+  if (!bot.facebookPageId) {
+    console.log("❌ Missing facebookPageId — required in LIVE mode");
+    return;
+  }
+
   // ===================================================
-  // AI RESPONSE
+  // 4) AI RESPONSE (بدون GENERATE_SYSTEM_INSTRUCTION)
   // ===================================================
   let replyText = "";
 
   try {
     const model = getModel();
-    const systemInstruction = GENERATE_SYSTEM_INSTRUCTION(bot);
+
+    const systemInstruction =
+      "أنت مساعد ذكي للرد على عملاء متجر عبر رسائل إنستغرام. " +
+      "رد بالعربية بشكل مهذب، مختصر، وواضح، وحاول أن تكون خدمياً وتطلب التوضيح عند الحاجة.";
 
     const result = await model.generateContent([
       { text: systemInstruction },
-      { text: messageText },
+      { text: messageText }
     ]);
 
     replyText = result.response.text();
@@ -186,15 +174,19 @@ async function processEvent(entryId: string, event: any) {
   }
 
   // ===================================================
-  // SEND IG REPLY (TEST MODE: SEND USING igBusinessId)
+  // 5) SEND IG REPLY — PRODUCTION (PAGE_ID IS REQUIRED)
   // ===================================================
   try {
+    console.log(`📤 Sending reply via PAGE ID: ${bot.facebookPageId}`);
+
     await sendInstagramMessage(
-      igBusinessId,          // ← كما طلبت: Test Mode
+      bot.facebookPageId,      // ✅ هذا الصحيح في LIVE MODE
       senderId,
       replyText,
       bot.instagramAccessToken
     );
+
+    console.log("✅ Reply sent!");
 
   } catch (error) {
     console.error("❌ Failed sending IG reply:", error);
