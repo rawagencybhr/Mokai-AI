@@ -1,95 +1,187 @@
+// app/api/webhook/route.ts
 
-import { NextRequest, NextResponse } from 'next/server';
-import { collection, query, where, getDocs } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
-import { getModel, MODEL_NAME } from '@/lib/gemini';
-import { sendWhatsAppMessage } from '@/lib/meta';
-import { GENERATE_SYSTEM_INSTRUCTION } from '@/constants';
-import { BotConfig } from '@/types';
+import { NextRequest, NextResponse } from "next/server";
+import { collection, query, where, getDocs } from "firebase/firestore";
+import { db } from "@/services/firebaseConfig";
+import { getModel } from "@/lib/gemini";
+import { GENERATE_SYSTEM_INSTRUCTION } from "@/constants";
+import { sendInstagramMessage } from "@/lib/meta";
+import { BotConfig } from "@/types";
 
-// Verification (GET)
+export const dynamic = "force-dynamic";
+
+// ===================================================
+// 1) VERIFY WEBHOOK (GET)
+// ===================================================
 export async function GET(req: NextRequest) {
-  const { searchParams } = new URL(req.url);
-  const mode = searchParams.get('hub.mode');
-  const token = searchParams.get('hub.verify_token');
-  const challenge = searchParams.get('hub.challenge');
+  const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN;
+  const url = new URL(req.url);
 
-  // We reuse the same verify token for simplicity, or you can add a separate env var
-  if (mode === 'subscribe' && token === process.env.INSTAGRAM_VERIFY_TOKEN) {
+  const mode = url.searchParams.get("hub.mode");
+  const token = url.searchParams.get("hub.verify_token");
+  const challenge = url.searchParams.get("hub.challenge");
+
+  if (mode === "subscribe" && token === VERIFY_TOKEN) {
     return new NextResponse(challenge, { status: 200 });
   }
-  return new NextResponse('Forbidden', { status: 403 });
+
+  return new NextResponse("Invalid verify token", { status: 403 });
 }
 
-// Events (POST)
+// ===================================================
+// 2) HANDLE INSTAGRAM EVENTS (POST)
+// ===================================================
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
 
-    if (body.object === 'whatsapp_business_account') {
-      for (const entry of body.entry) {
-        for (const change of entry.changes) {
-            if (change.value.messages) {
-                for (const message of change.value.messages) {
-                    await processWhatsAppMessage(message, change.value.metadata.phone_number_id);
-                }
-            }
-        }
-      }
-      return new NextResponse('EVENT_RECEIVED', { status: 200 });
+    if (body.object !== "instagram") {
+      return new NextResponse("Not Instagram Event", { status: 404 });
     }
-    return new NextResponse('Not Found', { status: 404 });
-  } catch (error) {
-    console.error('WhatsApp Webhook Error:', error);
-    return new NextResponse('Internal Error', { status: 500 });
+
+    for (const entry of body.entry ?? []) {
+      if (!entry.messaging) continue;
+
+      for (const msgEvent of entry.messaging) {
+        await processEvent(entry.id, msgEvent);
+      }
+    }
+
+    return new NextResponse("EVENT_RECEIVED", { status: 200 });
+
+  } catch (err) {
+    console.error("❌ Webhook Error:", err);
+    return new NextResponse("Internal Error", { status: 500 });
   }
 }
 
-async function processWhatsAppMessage(message: any, phoneNumberId: string) {
-  // Extract details
-  const from = message.from; // User's phone number
-  const messageText = message.text?.body;
+// ===================================================
+// 3) PROCESS A SINGLE IG EVENT
+// ===================================================
+async function processEvent(entryId: string, event: any) {
 
-  if (!messageText) return; // Only process text for now
+  console.log("EVENT KEYS =>", Object.keys(event));
 
-  // 1. Find Bot by WhatsApp Phone Number ID
-  const botsRef = collection(db, 'bots');
-  const q = query(botsRef, where('whatsappPhoneNumberId', '==', phoneNumberId));
-  const querySnapshot = await getDocs(q);
-
-  if (querySnapshot.empty) {
-      console.log(`No bot found for WhatsApp Phone ID: ${phoneNumberId}`);
-      return;
+  // ===================================================
+  // IGNORE EVERYTHING EXCEPT A TRUE MESSAGE EVENT
+  // ===================================================
+  if (!event.message) {
+    console.log("ℹ️ Ignored non-message event:", Object.keys(event));
+    return;
   }
 
-  const botDoc = querySnapshot.docs[0];
+  // IGNORE BOT ECHO
+  if (event.message?.is_echo) {
+    console.log("ℹ️ Echo message ignored");
+    return;
+  }
+
+  // ===================================================
+  // EXTRACT IDs
+  // ===================================================
+  const senderId = event.sender?.id;
+  const igBusinessId = event.recipient?.id;
+
+  if (!senderId || !igBusinessId) {
+    console.log("⚠️ Missing senderId or igBusinessId", { senderId, igBusinessId });
+    return;
+  }
+
+  // ===================================================
+  // EXTRACT MESSAGE CONTENT
+  // ===================================================
+  let messageText: string | null = null;
+
+  if (event.message?.text) {
+    messageText = event.message.text;
+  } 
+  else if (event.message?.attachments?.[0]?.type === "image") {
+    messageText = "📷 تم استلام صورة";
+  }
+
+  if (!messageText) {
+    console.log("⚠️ No usable text found in message");
+    return;
+  }
+
+  console.log(`📨 Message from ${senderId} to ${igBusinessId}: ${messageText}`);
+
+  // ===================================================
+  // FIND BOT BY BUSINESS ID OR PAGE ID
+  // ===================================================
+  const botsRef = collection(db, "bots");
+
+  let botsSnapshot = await getDocs(
+    query(botsRef, where("instagramBusinessId", "==", igBusinessId))
+  );
+
+  if (botsSnapshot.empty) {
+    console.log(`ℹ️ Not found in instagramBusinessId, checking instagramPageId...`);
+    botsSnapshot = await getDocs(
+      query(botsRef, where("instagramPageId", "==", igBusinessId))
+    );
+  }
+
+  if (botsSnapshot.empty) {
+    console.log(`❌ No bot found for: ${igBusinessId}`);
+    return;
+  }
+
+  console.log("✅ Bot Found!");
+
+  const botDoc = botsSnapshot.docs[0];
   const bot = botDoc.data() as BotConfig;
 
-  if (!bot.isActive) return;
-
-  // CHECK: Listening Mode
-  if (bot.isListening) {
-      console.log(`Bot ${bot.botName} (WhatsApp) is in Listening Mode.`);
-      return;
+  if (!bot.isActive) {
+    console.log("⚠️ Bot is inactive");
+    return;
   }
 
-  // 2. Generate Reply
-  const systemInstruction = GENERATE_SYSTEM_INSTRUCTION(bot, "", undefined, -1);
-  
+  if (!bot.instagramAccessToken) {
+    console.log("❌ Missing instagramAccessToken");
+    return;
+  }
+
+  // ===================================================
+  // GENERATE AI REPLY
+  // ===================================================
+  let replyText = "";
+
   try {
     const model = getModel();
+    const systemInstruction = GENERATE_SYSTEM_INSTRUCTION(bot);
+
     const result = await model.generateContent([
       { text: systemInstruction },
       { text: messageText }
     ]);
-    const replyText = result.response.text();
-    if (!replyText) return;
 
-    // 3. Send Reply via WhatsApp API
-    if (bot.whatsappAccessToken) {
-        await sendWhatsAppMessage(bot.whatsappPhoneNumberId!, from, replyText, bot.whatsappAccessToken);
-    }
+    replyText = result.response.text();
+
   } catch (error) {
-    console.error('Gemini/WhatsApp Error:', error);
+    console.error("❌ Gemini Error:", error);
+    return;
+  }
+
+  if (!replyText) {
+    console.log("⚠️ AI returned empty reply");
+    return;
+  }
+
+  // ===================================================
+  // SEND REPLY (TEST MODE — USING igBusinessId)
+  // ===================================================
+  try {
+    await sendInstagramMessage(
+      igBusinessId,            // ← كما تريد للتيست
+      senderId,
+      replyText,
+      bot.instagramAccessToken
+    );
+
+    console.log("✅ Reply sent successfully!");
+
+  } catch (error) {
+    console.error("❌ Failed sending IG reply:", error);
   }
 }
