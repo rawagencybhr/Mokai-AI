@@ -1,21 +1,22 @@
+// lib/meta.ts
 
 export async function sendInstagramMessage(
-  pageId: string,       // MUST be PAGE ID 
+  instagramAccountId: string, // ✅ التعديل: نستخدم معرف حساب إنستغرام للأعمال
   recipientId: string,
   text: string,
   accessToken: string
 ) {
-  const url = `https://graph.facebook.com/v21.0/${pageId}/messages`;
+  // ✅ التعديل: الرابط يستخدم معرف إنستغرام (الذي يبدأ بـ 1784...)
+  const url = `https://graph.facebook.com/v21.0/${instagramAccountId}/messages`;
 
-  console.log("📤 Sending IG Message (Corrected)", {
-    pageId,
+  console.log("📤 Sending IG Message", {
+    instagramAccountId,
     recipientId,
     text,
     hasToken: !!accessToken
   });
 
   const payload = {
-    messaging_type: "RESPONSE",
     recipient: { id: recipientId },
     message: { text }
   };
@@ -24,7 +25,7 @@ export async function sendInstagramMessage(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${accessToken}`,   // REQUIRED HERE 
+      Authorization: `Bearer ${accessToken}`,
     },
     body: JSON.stringify(payload),
   });
@@ -40,6 +41,7 @@ export async function sendInstagramMessage(
   return data;
 }
 
+// دالة الواتساب (صحيحة كما هي)
 export async function sendWhatsAppMessage(
   phoneNumberId: string,
   to: string,
@@ -47,7 +49,7 @@ export async function sendWhatsAppMessage(
   accessToken: string
 ) {
   const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
-  
+   
   try {
     const response = await fetch(url, {
       method: 'POST',
