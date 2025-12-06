@@ -62,31 +62,48 @@ export async function POST(req: NextRequest) {
 // 3) PROCESS EACH INSTAGRAM MESSAGE
 // ================================
 async function processInstagramEvent(event: any) {
-
-  const senderId = event.sender?.id;
-  const businessId = event.recipient?.id;
-
-  const messageText =
-    event.message?.text ??
-    event.message_edit?.text ??
-    null;
-
-  if (!messageText || !senderId || !businessId) {
-    console.log("⚠️ Missing sender/message/businessId");
+  const isEcho = event.message?.is_echo === true;
+  if (isEcho) {
+    console.log("ℹ️ Skipping echo message");
     return;
   }
 
-  console.log("📨 Incoming IG Message:", { senderId, businessId, messageText });
+  const senderId = event.sender?.id || event.message?.from?.id || event.user?.id || null;
+  const pageId = event.recipient?.id || (event.recipient && (event.recipient as any).user_id) || null;
+
+  let messageText: string | null =
+    event.message?.text ??
+    event.message_edit?.text ??
+    event.postback?.payload ??
+    null;
+
+  if (!messageText && Array.isArray(event.message?.attachments) && event.message.attachments.length > 0) {
+    messageText = "[ATTACHMENT]";
+  }
+
+  if (!messageText || !senderId || !pageId) {
+    console.log("⚠️ Missing sender/message/businessId", {
+      hasSender: !!senderId,
+      hasRecipient: !!pageId,
+      hasText: !!messageText,
+      eventKeys: Object.keys(event || {})
+    });
+    return;
+  }
+
+  console.log("📨 Incoming IG Message:", { senderId, pageId, messageText });
 
 
-  // Lookup bot config in Firestore
+  // Lookup bot config in Firestore by PAGE ID first, then fallback to business ID
   const botsRef = collection(db, "bots");
-  // Match by PAGE ID (recipient.id). Callback stores both instagramPageId and instagramBusinessId.
-  const q = query(botsRef, where("instagramPageId", "==", businessId));
-  const querySnapshot = await getDocs(q);
+  let querySnapshot = await getDocs(query(botsRef, where("instagramPageId", "==", pageId)));
 
   if (querySnapshot.empty) {
-    console.log("⚠️ No bot found for businessId:", businessId);
+    querySnapshot = await getDocs(query(botsRef, where("instagramBusinessId", "==", pageId)));
+  }
+
+  if (querySnapshot.empty) {
+    console.log("⚠️ No bot found for pageId:", pageId);
     return;
   }
 
