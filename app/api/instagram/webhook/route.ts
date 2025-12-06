@@ -5,7 +5,7 @@ import { collection, query, where, getDocs } from "firebase/firestore";
 import { db } from "@/services/firebaseConfig";
 import { getModel } from "@/lib/gemini";
 import { GENERATE_SYSTEM_INSTRUCTION } from "@/constants";
-import { sendInstagramMessage } from "@/lib/meta"; // تأكد من المسار الصحيح
+import { sendInstagramMessage } from "@/lib/meta";
 import { BotConfig } from "@/types";
 
 export const dynamic = "force-dynamic";
@@ -35,9 +35,6 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
 
-    // طباعة خفيفة لتقليل الازدحام في اللوج، يمكنك تفعيل السطر التالي للفحص الكامل
-    // console.log("📩 Instagram Event:", JSON.stringify(body, null, 2));
-
     if (body.object !== "instagram") {
       return new NextResponse("Not Instagram Event", { status: 404 });
     }
@@ -46,7 +43,6 @@ export async function POST(req: NextRequest) {
       if (!entry.messaging) continue;
 
       for (const msgEvent of entry.messaging) {
-        // نمرر entry.id أيضاً لأنه غالباً يمثل الحساب التجاري
         await processEvent(entry.id, msgEvent);
       }
     }
@@ -60,40 +56,51 @@ export async function POST(req: NextRequest) {
 }
 
 // ===================================================
-// 3) PROCESS A SINGLE IG EVENT
+// 3) PROCESS EVENT
 // ===================================================
 async function processEvent(entryId: string, event: any) {
 
-  // ✅ تجاهل أحداث التعديل لتجنب أخطاء Missing Data
+  console.log("EVENT KEYS =>", Object.keys(event));
+
+  // ===================================================
+  // IGNORE NON-MESSAGE EVENTS (IMPORTANT!)
+  // ===================================================
+  if (!event.message) {
+    console.log("ℹ️ Ignored non-message event:", Object.keys(event));
+    return;
+  }
+
+  // IGNORE EDITS
   if (event.message_edit) {
     console.log("ℹ️ IG message_edit ignored");
     return;
   }
 
-  // ✅ تجاهل أحداث حذف الرسائل
+  // IGNORE DELETES
   if (event.message_unsend) {
     console.log("ℹ️ IG message_unsend ignored");
     return;
   }
 
-  // ✅ تجاهل التفاعلات (القلوب واللايكات)
+  // IGNORE REACTIONS
   if (event.reaction) {
     console.log("ℹ️ IG reaction ignored");
     return;
   }
 
-  // ✅ تجاهل رسائل الصدى (التي يرسلها البوت نفسه)
+  // IGNORE ECHOES
   if (event.message?.is_echo) {
     return;
   }
 
-  // استخراج المعرفات
+  // ===================================================
+  // EXTRACT IDs
+  // ===================================================
   const senderId = event.sender?.id;
-  // في إنستغرام، المستلم (recipient) هو الحساب التجاري (Business Account)
-  const igBusinessId = event.recipient?.id; 
+  const igBusinessId = event.recipient?.id;
 
   if (!senderId || !igBusinessId) {
-    console.log("⚠️ Missing senderId or igBusinessId");
+    console.log("⚠️ Missing senderId or igBusinessId", { senderId, igBusinessId });
     return;
   }
 
@@ -101,53 +108,46 @@ async function processEvent(entryId: string, event: any) {
   // EXTRACT MESSAGE CONTENT
   // ===================================================
   let messageText: string | null = null;
-  
-  // التعامل مع النصوص
+
   if (event.message?.text) {
     messageText = event.message.text;
-  }
-  // التعامل مع الصور (اختياري)
-  else if (event.message?.attachments?.[0]?.type === 'image') {
-    messageText = "User sent an image"; 
+  } 
+  else if (event.message?.attachments?.[0]?.type === "image") {
+    messageText = "User sent an image";
   }
 
   if (!messageText) {
-    console.log("⚠️ Unsupported message type or empty text — skipped");
+    console.log("⚠️ Could not extract message text");
     return;
   }
 
   console.log(`📨 Message from ${senderId} to ${igBusinessId}: ${messageText}`);
 
-// ===================================================
-// 4) FIND BOT BY INSTAGRAM ID (BUSINESS OR PAGE)
-// ===================================================
-const botsRef = collection(db, "bots");
+  // ===================================================
+  // FIND BOT (BUSINESS ID OR PAGE ID)
+  // ===================================================
+  const botsRef = collection(db, "bots");
 
-// البحث بمحاولة رقم 1 — instagramBusinessId
-let botsSnapshot = await getDocs(
-  query(botsRef, where("instagramBusinessId", "==", igBusinessId))
-);
-
-// لو لم نجد أي بوت
-if (botsSnapshot.empty) {
-  console.log(`ℹ️ No bot under instagramBusinessId ${igBusinessId}, trying instagramPageId...`);
-
-  // محاولة رقم 2 — instagramPageId
-  botsSnapshot = await getDocs(
-    query(botsRef, where("instagramPageId", "==", igBusinessId))
+  let botsSnapshot = await getDocs(
+    query(botsRef, where("instagramBusinessId", "==", igBusinessId))
   );
-}
 
-if (botsSnapshot.empty) {
-  console.log(`❌ No bot found for ANY ID: ${igBusinessId}.`);
-  return;
-}
+  if (botsSnapshot.empty) {
+    console.log(`ℹ️ No bot under instagramBusinessId ${igBusinessId}, trying instagramPageId...`);
+    botsSnapshot = await getDocs(
+      query(botsRef, where("instagramPageId", "==", igBusinessId))
+    );
+  }
 
-console.log("✅ Bot found!");
+  if (botsSnapshot.empty) {
+    console.log(`❌ No bot found for ANY ID: ${igBusinessId}`);
+    return;
+  }
 
-const botDoc = botsSnapshot.docs[0];
-const bot = botDoc.data() as BotConfig;
+  console.log("✅ Bot found!");
 
+  const botDoc = botsSnapshot.docs[0];
+  const bot = botDoc.data() as BotConfig;
 
   if (!bot.isActive) {
     console.log("⚠️ Bot is inactive");
@@ -155,12 +155,12 @@ const bot = botDoc.data() as BotConfig;
   }
 
   if (!bot.instagramAccessToken) {
-    console.log("❌ Missing instagramAccessToken in bot config");
+    console.log("❌ Missing instagramAccessToken");
     return;
   }
 
   // ===================================================
-  // 5) AI RESOLUTION
+  // AI RESPONSE
   // ===================================================
   let replyText = "";
 
@@ -170,7 +170,7 @@ const bot = botDoc.data() as BotConfig;
 
     const result = await model.generateContent([
       { text: systemInstruction },
-      { text: messageText }
+      { text: messageText },
     ]);
 
     replyText = result.response.text();
@@ -186,15 +186,14 @@ const bot = botDoc.data() as BotConfig;
   }
 
   // ===================================================
-  // 6) SEND IG REPLY
+  // SEND IG REPLY (TEST MODE: SEND USING igBusinessId)
   // ===================================================
   try {
-    // ✅ تصحيح هام: نمرر igBusinessId (الذي يبدأ بـ 1784) وليس facebookPageId
     await sendInstagramMessage(
-      igBusinessId,              // معرف الحساب الذي سيرسل الرد
-      senderId,                  // معرف المستخدم المستلم
-      replyText,                 // نص الرسالة
-      bot.instagramAccessToken   // توكن الوصول
+      igBusinessId,          // ← كما طلبت: Test Mode
+      senderId,
+      replyText,
+      bot.instagramAccessToken
     );
 
   } catch (error) {
