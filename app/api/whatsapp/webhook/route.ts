@@ -4,7 +4,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { collection, query, where, getDocs } from "firebase/firestore";
 import { db } from "@/services/firebaseConfig";
 import { getModel } from "@/lib/gemini";
-import { GENERATE_SYSTEM_INSTRUCTION } from "@/constants";
 import { sendInstagramMessage } from "@/lib/meta";
 import { BotConfig } from "@/types";
 
@@ -142,6 +141,11 @@ async function processEvent(entryId: string, event: any) {
     return;
   }
 
+  if (!bot.facebookPageId) {
+    console.log("❌ Missing facebookPageId — required in LIVE mode");
+    return;
+  }
+
   // ===================================================
   // GENERATE AI REPLY
   // ===================================================
@@ -149,7 +153,10 @@ async function processEvent(entryId: string, event: any) {
 
   try {
     const model = getModel();
-    const systemInstruction = GENERATE_SYSTEM_INSTRUCTION(bot, "", undefined, -1);
+
+    const systemInstruction =
+      "أنت مساعد ذكي للرد على عملاء متجر عبر رسائل إنستغرام. " +
+      "رد بالعربية بشكل مهذب، مختصر، وواضح، وحاول أن تكون خدمياً وتطلب التوضيح عند الحاجة.";
 
     const result = await model.generateContent([
       { text: systemInstruction },
@@ -169,22 +176,19 @@ async function processEvent(entryId: string, event: any) {
   }
 
   // ===================================================
-  // SEND REPLY (PRODUCTION MODE — USING PAGE ID)
+  // SEND IG REPLY — PRODUCTION (PAGE_ID IS REQUIRED)
   // ===================================================
   try {
-    if (!bot.instagramPageId) {
-      console.log("❌ Missing instagramPageId (required in LIVE mode)");
-      return;
-    }
+    console.log(`📤 Sending reply via PAGE ID: ${bot.facebookPageId}`);
 
     await sendInstagramMessage(
-      bot.instagramPageId,
+      bot.facebookPageId,
       senderId,
       replyText,
       bot.instagramAccessToken
     );
 
-    console.log("✅ Reply sent successfully!");
+    console.log("✅ Reply sent!");
 
   } catch (error) {
     console.error("❌ Failed sending IG reply:", error);

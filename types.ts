@@ -111,6 +111,7 @@ export interface BotConfig {
   instagramBusinessId?: string;
   instagramUserId?: string;
   instagramPageId?: string;
+  facebookPageId?: string;
   instagramUsername?: string;
   longLivedToken?: string;
   connectedAt?: string;
