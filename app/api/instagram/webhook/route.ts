@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { collection, query, where, getDocs } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { db } from "@/services/firebaseConfig";
 import { getModel } from "@/lib/gemini";
 import { GENERATE_SYSTEM_INSTRUCTION } from "@/constants";
 import { sendInstagramMessage } from "@/lib/meta";
 import { BotConfig } from "@/types";
+
+export const dynamic = "force-dynamic";
 
 // ===================================================
 // 1) VERIFY WEBHOOK
@@ -34,14 +36,14 @@ export async function POST(req: NextRequest) {
     console.log("📩 Instagram Webhook Event Received:\n", JSON.stringify(body, null, 2));
 
     if (body.object !== "instagram") {
-      return new NextResponse("Not an Instagram event", { status: 404 });
+      return new NextResponse("Not Instagram Event", { status: 404 });
     }
 
     for (const entry of body.entry) {
       if (!entry.messaging) continue;
 
-      for (const event of entry.messaging) {
-        await processInstagramEvent(event);
+      for (const msgEvent of entry.messaging) {
+        await processEvent(entry.id, msgEvent);
       }
     }
 
@@ -49,57 +51,77 @@ export async function POST(req: NextRequest) {
 
   } catch (err) {
     console.error("❌ Webhook Error:", err);
-    return new NextResponse("Internal Server Error", { status: 500 });
+    return new NextResponse("Internal Error", { status: 500 });
   }
 }
 
 // ===================================================
-// 3) PROCESS SINGLE INSTAGRAM EVENT
+// 3) PROCESS EVENT
 // ===================================================
-async function processInstagramEvent(event: any) {
-  // Skip echo messages from IG
+async function processEvent(entryId: string, event: any) {
+
+  // Skip echo messages
   if (event.message?.is_echo) {
-    console.log("ℹ️ Skipping echo message");
+    console.log("ℹ️ Skipping echo event.");
     return;
   }
 
-  // Extract sender + page ID (VERY IMPORTANT)
-  const senderId = event.sender?.id;        // IG user ID
-  const pageId = event.recipient?.id;       // Page ID (used for reply)
+  const senderId = event.sender?.id;
+  const igBusinessId = event.recipient?.id; // VERY IMPORTANT — IG business ID
 
-  // Extract message text
-  let messageText =
-    event.message?.text ??
-    event.message_edit?.text ??
-    null;
-
-  if (!senderId || !pageId || !messageText) {
-    console.log("⚠️ Missing data", {
-      senderId,
-      pageId,
-      messageText,
-      keys: Object.keys(event)
-    });
+  if (!senderId || !igBusinessId) {
+    console.log("⚠️ Missing senderId or recipient IG ID", event);
     return;
   }
 
-  console.log("📨 Incoming IG Message:", { senderId, pageId, messageText });
+  let messageType = "unknown";
+  let messageText = null;
+  let imageUrl = null;
+
+  // TEXT
+  if (event.message?.text) {
+    messageText = event.message.text;
+    messageType = "text";
+  }
+
+  // IMAGE
+  if (event.message?.attachments?.[0]?.payload?.url) {
+    imageUrl = event.message.attachments[0].payload.url;
+    messageType = "image";
+  }
+
+  // EDITED MESSAGE
+  if (event.message_edit) {
+    console.log("ℹ️ Edit event — skipped.");
+    return;
+  }
+
+  // UNSEND MESSAGE
+  if (event.message_unsend) {
+    console.log("ℹ️ Unsend event — skipped.");
+    return;
+  }
+
+  // NO MESSAGE CONTENT
+  if (!messageText && !imageUrl) {
+    console.log("⚠️ Unsupported message type — skip.");
+    return;
+  }
+
+  console.log("📨 Incoming IG Message:", { senderId, igBusinessId, messageText, imageUrl });
 
   // ===================================================
-  // 4) FIND BOT BY PAGE ID
+  // 4) FIND BOT BY INSTAGRAM BUSINESS ID
   // ===================================================
   const botsRef = collection(db, "bots");
+  const botsSnapshot = await getDocs(query(botsRef, where("instagramPageId", "==", igBusinessId)));
 
-  let querySnapshot = await getDocs(
-    query(botsRef, where("instagramPageId", "==", pageId))
-  );
-
-  if (querySnapshot.empty) {
-    console.log("⚠️ No bot found for pageId:", pageId);
+  if (botsSnapshot.empty) {
+    console.log("⚠️ No bot found for IG Business ID:", igBusinessId);
     return;
   }
 
-  const botDoc = querySnapshot.docs[0];
+  const botDoc = botsSnapshot.docs[0];
   const bot = botDoc.data() as BotConfig;
 
   if (!bot.isActive) {
@@ -108,27 +130,29 @@ async function processInstagramEvent(event: any) {
   }
 
   if (!bot.instagramAccessToken) {
-    console.log("❌ Missing page access token!");
+    console.log("❌ Missing Instagram page token!");
     return;
   }
 
   // ===================================================
-  // 5) GENERATE AI REPLY
+  // 5) AI RESPONSE
   // ===================================================
-  let replyText = "";
+  const inputText = messageText || "[User sent an image]";
 
+  let replyText = "";
   try {
     const model = getModel();
-    const systemInstruction = GENERATE_SYSTEM_INSTRUCTION(bot, "", undefined, -1);
+    const systemInstruction = GENERATE_SYSTEM_INSTRUCTION(bot);
 
     const result = await model.generateContent([
       { text: systemInstruction },
-      { text: messageText }
+      { text: inputText }
     ]);
 
     replyText = result.response.text();
-  } catch (err) {
-    console.error("❌ Gemini Error:", err);
+
+  } catch (error) {
+    console.error("❌ Gemini Error:", error);
     return;
   }
 
@@ -140,19 +164,19 @@ async function processInstagramEvent(event: any) {
   console.log("🤖 Generated Reply:", replyText);
 
   // ===================================================
-  // 6) SEND MESSAGE BACK TO USER (THE MOST IMPORTANT PART)
+  // 6) SEND IG REPLY
   // ===================================================
   try {
-    const sendResult = await sendInstagramMessage(
-      pageId,          // MUST be page ID
-      senderId,                     // IG user
+    const sent = await sendInstagramMessage(
+      igBusinessId,
+      senderId,
       replyText,
-      bot.instagramAccessToken      // PAGE TOKEN
+      bot.instagramAccessToken
     );
 
-    console.log("📤 IG Reply Sent:", sendResult);
+    console.log("📤 IG Reply Sent:", sent);
 
-  } catch (err) {
-    console.error("❌ Failed to send reply:", err);
+  } catch (error) {
+    console.error("❌ Failed sending IG reply:", error);
   }
 }
