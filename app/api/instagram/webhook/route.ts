@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
       return new NextResponse("Not Instagram Event", { status: 404 });
     }
 
-    for (const entry of body.entry) {
+    for (const entry of body.entry ?? []) {
       if (!entry.messaging) continue;
 
       for (const msgEvent of entry.messaging) {
@@ -56,67 +56,70 @@ export async function POST(req: NextRequest) {
 }
 
 // ===================================================
-// 3) PROCESS EVENT
+// 3) PROCESS A SINGLE IG EVENT
 // ===================================================
 async function processEvent(entryId: string, event: any) {
 
-  // Skip echo messages
+  // ===================================================
+  // SKIP EVENTS THAT ARE NOT MESSAGES
+  // ===================================================
+  if (event.message_edit) {
+    console.log("ℹ️ IG message_edit event ignored");
+    return;
+  }
+
+  if (event.message_unsend) {
+    console.log("ℹ️ IG message_unsend event ignored");
+    return;
+  }
+
+  // Skip echo messages (bot replying to itself)
   if (event.message?.is_echo) {
     console.log("ℹ️ Skipping echo event.");
     return;
   }
 
   const senderId = event.sender?.id;
-  const igBusinessId = event.recipient?.id; // VERY IMPORTANT — IG business ID
+  const igBusinessId = event.recipient?.id; // IG business ID (the receiving IG account)
 
   if (!senderId || !igBusinessId) {
-    console.log("⚠️ Missing senderId or recipient IG ID", event);
+    console.log("⚠️ Missing senderId or igBusinessId");
     return;
   }
 
-  let messageType = "unknown";
-  let messageText = null;
-  let imageUrl = null;
+  // ===================================================
+  // EXTRACT MESSAGE CONTENT
+  // ===================================================
+  let messageText: string | null = null;
+  let imageUrl: string | null = null;
 
-  // TEXT
   if (event.message?.text) {
     messageText = event.message.text;
-    messageType = "text";
   }
 
-  // IMAGE
   if (event.message?.attachments?.[0]?.payload?.url) {
     imageUrl = event.message.attachments[0].payload.url;
-    messageType = "image";
   }
 
-  // EDITED MESSAGE
-  if (event.message_edit) {
-    console.log("ℹ️ Edit event — skipped.");
-    return;
-  }
-
-  // UNSEND MESSAGE
-  if (event.message_unsend) {
-    console.log("ℹ️ Unsend event — skipped.");
-    return;
-  }
-
-  // NO MESSAGE CONTENT
   if (!messageText && !imageUrl) {
-    console.log("⚠️ Unsupported message type — skip.");
+    console.log("⚠️ Unsupported message type — skipped");
     return;
   }
 
-  console.log("📨 Incoming IG Message:", { senderId, igBusinessId, messageText, imageUrl });
+  console.log("📨 Incoming IG Message:", {
+    senderId,
+    igBusinessId,
+    messageText,
+    imageUrl
+  });
 
   // ===================================================
   // 4) FIND BOT BY INSTAGRAM BUSINESS ID
   // ===================================================
   const botsRef = collection(db, "bots");
-const botsSnapshot = await getDocs(
-  query(botsRef, where("instagramBusinessId", "==", igBusinessId))
-);
+  const botsSnapshot = await getDocs(
+    query(botsRef, where("instagramBusinessId", "==", igBusinessId))
+  );
 
   if (botsSnapshot.empty) {
     console.log("⚠️ No bot found for IG Business ID:", igBusinessId);
@@ -131,24 +134,25 @@ const botsSnapshot = await getDocs(
     return;
   }
 
-  if (!bot.instagramAccessToken) {
-    console.log("❌ Missing Instagram page token!");
+  if (!bot.instagramAccessToken || !bot.facebookPageId) {
+    console.log("❌ Missing required IG credentials");
     return;
   }
 
   // ===================================================
-  // 5) AI RESPONSE
+  // 5) AI RESOLUTION
   // ===================================================
-  const inputText = messageText || "[User sent an image]";
+  const userInput = messageText || "User sent an image";
 
   let replyText = "";
+
   try {
     const model = getModel();
     const systemInstruction = GENERATE_SYSTEM_INSTRUCTION(bot);
 
     const result = await model.generateContent([
       { text: systemInstruction },
-      { text: inputText }
+      { text: userInput }
     ]);
 
     replyText = result.response.text();
@@ -159,7 +163,7 @@ const botsSnapshot = await getDocs(
   }
 
   if (!replyText) {
-    console.log("⚠️ Empty AI reply");
+    console.log("⚠️ AI reply empty");
     return;
   }
 
@@ -170,12 +174,11 @@ const botsSnapshot = await getDocs(
   // ===================================================
   try {
     const sent = await sendInstagramMessage(
-  bot.facebookPageId,   // ✔ يجب إرسال الرسالة باستخدام Facebook Page ID
-  senderId,
-  replyText,
-  bot.instagramAccessToken
-);
-
+      bot.facebookPageId,          // PAGE ID (required by Meta API)
+      senderId,                    // IG USER ID
+      replyText,                   // message
+      bot.instagramAccessToken     // PAGE ACCESS TOKEN
+    );
 
     console.log("📤 IG Reply Sent:", sent);
 
