@@ -1,16 +1,16 @@
-// app/api/whatsapp/webhook/route.ts
+// app/api/webhook/route.ts
 
 import { NextRequest, NextResponse } from "next/server";
 import { collection, query, where, getDocs } from "firebase/firestore";
 import { db } from "@/services/firebaseConfig";
 import { getModel } from "@/lib/gemini";
+import { sendInstagramMessage } from "@/lib/meta";
 import { BotConfig } from "@/types";
-import { GENERATE_SYSTEM_INSTRUCTION } from "@/constants"; // تأكد من المسار إذا كان مختلف
 
 export const dynamic = "force-dynamic";
 
 // ===================================================
-// 1) VERIFY WEBHOOK (GET) — نفس إنستقرام
+// 1) VERIFY WEBHOOK (GET)
 // ===================================================
 export async function GET(req: NextRequest) {
   const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN;
@@ -28,163 +28,147 @@ export async function GET(req: NextRequest) {
 }
 
 // ===================================================
-// 2) HANDLE WHATSAPP EVENTS (POST)
+// 2) HANDLE INSTAGRAM EVENTS (POST)
 // ===================================================
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
 
-    if (body.object !== "whatsapp_business_account") {
-      return new NextResponse("Not WhatsApp Event", { status: 404 });
+    if (body.object !== "instagram") {
+      return new NextResponse("Not Instagram Event", { status: 404 });
     }
 
     for (const entry of body.entry ?? []) {
-      const changes = entry.changes ?? [];
-      for (const change of changes) {
-        const value = change.value;
-        const messages = value.messages;
+      if (!entry.messaging) continue;
 
-        // تجاهل الـ statuses وغيره
-        if (!messages || messages.length === 0) continue;
-
-        for (const msg of messages) {
-          await processWhatsAppMessage(value, msg);
-        }
+      for (const msgEvent of entry.messaging) {
+        await processEvent(entry.id, msgEvent);
       }
     }
 
     return new NextResponse("EVENT_RECEIVED", { status: 200 });
 
   } catch (err) {
-    console.error("❌ WhatsApp Webhook Error:", err);
+    console.error("❌ Webhook Error:", err);
     return new NextResponse("Internal Error", { status: 500 });
   }
 }
 
 // ===================================================
-// 3) SEND WHATSAPP MESSAGE HELPER
+// 3) PROCESS A SINGLE IG EVENT
 // ===================================================
-async function sendWhatsAppMessage(
-  phoneNumberId: string,
-  to: string,
-  text: string,
-  token: string
-) {
-  const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
+async function processEvent(entryId: string, event: any) {
 
-  const payload = {
-    messaging_product: "whatsapp",
-    to,
-    type: "text",
-    text: { body: text },
-  };
+  console.log("EVENT KEYS =>", Object.keys(event));
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
-
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    console.error("❌ WhatsApp send error:", err);
+  // ===================================================
+  // IGNORE EVERYTHING EXCEPT A TRUE MESSAGE EVENT
+  // ===================================================
+  if (!event.message) {
+    console.log("ℹ️ Ignored non-message event:", Object.keys(event));
+    return;
   }
-}
 
-// ===================================================
-// 4) PROCESS A SINGLE WHATSAPP MESSAGE
-// ===================================================
-async function processWhatsAppMessage(value: any, message: any) {
-  console.log("🔥 WA EVENT KEYS =>", Object.keys(message));
-
-  const from = message.from; // رقم العميل (بصيغة E.164 مثل 9665...)
-  const phoneNumberId = value.metadata?.phone_number_id;
-
-  if (!from || !phoneNumberId) {
-    console.log("⚠️ Missing from or phone_number_id", { from, phoneNumberId });
+  // IGNORE BOT ECHO
+  if (event.message?.is_echo) {
+    console.log("ℹ️ Echo message ignored");
     return;
   }
 
   // ===================================================
-  // EXTRACT TEXT
+  // EXTRACT IDs
+  // ===================================================
+  const senderId = event.sender?.id;
+  const igBusinessId = event.recipient?.id;
+
+  if (!senderId || !igBusinessId) {
+    console.log("⚠️ Missing senderId or igBusinessId", { senderId, igBusinessId });
+    return;
+  }
+
+  // ===================================================
+  // EXTRACT MESSAGE CONTENT
   // ===================================================
   let messageText: string | null = null;
 
-  if (message.type === "text") {
-    messageText = message.text?.body;
-  } else if (message.type === "image") {
-    messageText = "📷 تم استلام صورة عبر واتساب.";
+  if (event.message?.text) {
+    messageText = event.message.text;
+  } 
+  else if (event.message?.attachments?.[0]?.type === "image") {
+    messageText = "📷 تم استلام صورة";
   }
 
   if (!messageText) {
-    console.log("⚠️ No usable text found in WA message");
+    console.log("⚠️ No usable text found in message");
     return;
   }
 
-  console.log(`📨 WhatsApp message from ${from}: ${messageText}`);
+  console.log(`📨 Message from ${senderId} to ${igBusinessId}: ${messageText}`);
 
   // ===================================================
-  // FIND BOT BY WHATSAPP PHONE NUMBER ID
+  // FIND BOT BY BUSINESS ID OR PAGE ID
   // ===================================================
   const botsRef = collection(db, "bots");
 
-  const botsSnapshot = await getDocs(
-    query(botsRef, where("whatsappPhoneNumberId", "==", phoneNumberId))
+  let botsSnapshot = await getDocs(
+    query(botsRef, where("instagramBusinessId", "==", igBusinessId))
   );
 
   if (botsSnapshot.empty) {
-    console.log("❌ No bot found for whatsappPhoneNumberId:", phoneNumberId);
+    console.log(`ℹ️ Not found in instagramBusinessId, checking instagramPageId...`);
+    botsSnapshot = await getDocs(
+      query(botsRef, where("instagramPageId", "==", igBusinessId))
+    );
+  }
+
+  if (botsSnapshot.empty) {
+    console.log(`❌ No bot found for: ${igBusinessId}`);
     return;
   }
 
-  console.log("✅ Bot Found for WhatsApp!");
+  console.log("✅ Bot Found!");
 
   const botDoc = botsSnapshot.docs[0];
   const bot = botDoc.data() as BotConfig;
 
-  // وضع الاستماع فقط (يسجل المحادثة بدون رد)
-  if (bot.isListening) {
-    console.log("🔇 Bot in LISTEN mode — no reply will be sent");
-    return;
-  }
-
   if (!bot.isActive) {
-    console.log("⚠️ Bot inactive");
+    console.log("⚠️ Bot is inactive");
     return;
   }
 
-  if (!bot.whatsappAccessToken) {
-    console.log("❌ Missing whatsappAccessToken");
+  if (!bot.instagramAccessToken) {
+    console.log("❌ Missing instagramAccessToken");
+    return;
+  }
+
+  // Use instagramPageId from Firestore because it actually represents the FB Page ID
+  const pageIdToUse = bot.instagramPageId;
+  if (!pageIdToUse) {
+    console.log("❌ Missing instagramPageId — required for sending messages");
     return;
   }
 
   // ===================================================
-  // GENERATE AI REPLY USING SAME SETTINGS LOGIC
+  // GENERATE AI REPLY
   // ===================================================
   let replyText = "";
 
   try {
     const model = getModel();
 
-    // نستخدم نفس العقل (GENERATE_SYSTEM_INSTRUCTION) اللي تستخدمه في الشات
-    const systemInstruction = GENERATE_SYSTEM_INSTRUCTION(
-      bot,
-      "",          // dynamicContext حالياً فاضي
-      undefined,   // userProfile غير متوفر هنا
-      -1           // نعتبرها أول رسالة (تقدر تطورها لاحقاً)
-    );
+    const systemInstruction =
+      "أنت مساعد ذكي للرد على عملاء متجر عبر رسائل إنستغرام. " +
+      "رد بالعربية بشكل مهذب، مختصر، وواضح، وحاول أن تكون خدمياً وتطلب التوضيح عند الحاجة.";
 
     const result = await model.generateContent([
       { text: systemInstruction },
-      { text: messageText },
+      { text: messageText }
     ]);
 
     replyText = result.response.text();
+
   } catch (error) {
-    console.error("❌ Gemini Error (WA):", error);
+    console.error("❌ Gemini Error:", error);
     return;
   }
 
@@ -194,21 +178,21 @@ async function processWhatsAppMessage(value: any, message: any) {
   }
 
   // ===================================================
-  // SEND WHATSAPP REPLY
+  // SEND IG REPLY — PRODUCTION (PAGE_ID IS REQUIRED)
   // ===================================================
   try {
-    console.log("📤 Sending WhatsApp reply...");
+    console.log(`📤 Sending reply via PAGE ID: ${pageIdToUse}`);
 
-    await sendWhatsAppMessage(
-      phoneNumberId,
-      from,
+    await sendInstagramMessage(
+      pageIdToUse,
+      senderId,
       replyText,
-      bot.whatsappAccessToken
+      bot.instagramAccessToken
     );
 
-    console.log("✅ WhatsApp reply sent!");
+    console.log("✅ Reply sent!");
 
   } catch (error) {
-    console.error("❌ Failed sending WA reply:", error);
+    console.error("❌ Failed sending IG reply:", error);
   }
 }
