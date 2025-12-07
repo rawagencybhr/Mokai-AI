@@ -5,30 +5,12 @@ import { collection, query, where, getDocs } from "firebase/firestore";
 import { db } from "@/services/firebaseConfig";
 import { getModel } from "@/lib/gemini";
 import { BotConfig } from "@/types";
-
-// دالة إرسال واتساب
-async function sendWhatsAppMessage(phoneNumberId: string, to: string, text: string, token: string) {
-  const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
-
-  await fetch(url, {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      messaging_product: "whatsapp",
-      to,
-      type: "text",
-      text: { body: text }
-    })
-  });
-}
+import { GENERATE_SYSTEM_INSTRUCTION } from "@/constants"; // تأكد من المسار إذا كان مختلف
 
 export const dynamic = "force-dynamic";
 
 // ===================================================
-// 1) VERIFY WEBHOOK
+// 1) VERIFY WEBHOOK (GET) — نفس إنستقرام
 // ===================================================
 export async function GET(req: NextRequest) {
   const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN;
@@ -58,19 +40,16 @@ export async function POST(req: NextRequest) {
 
     for (const entry of body.entry ?? []) {
       const changes = entry.changes ?? [];
-
       for (const change of changes) {
         const value = change.value;
-
-        // ignore statuses
-        if (value.statuses) continue;
-
         const messages = value.messages;
+
+        // تجاهل الـ statuses وغيره
         if (!messages || messages.length === 0) continue;
 
-        const msg = messages[0];
-
-        await processWhatsAppMessage(value, msg);
+        for (const msg of messages) {
+          await processWhatsAppMessage(value, msg);
+        }
       }
     }
 
@@ -83,56 +62,92 @@ export async function POST(req: NextRequest) {
 }
 
 // ===================================================
-// 3) PROCESS INCOMING WA MESSAGE
+// 3) SEND WHATSAPP MESSAGE HELPER
+// ===================================================
+async function sendWhatsAppMessage(
+  phoneNumberId: string,
+  to: string,
+  text: string,
+  token: string
+) {
+  const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
+
+  const payload = {
+    messaging_product: "whatsapp",
+    to,
+    type: "text",
+    text: { body: text },
+  };
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    console.error("❌ WhatsApp send error:", err);
+  }
+}
+
+// ===================================================
+// 4) PROCESS A SINGLE WHATSAPP MESSAGE
 // ===================================================
 async function processWhatsAppMessage(value: any, message: any) {
+  console.log("🔥 WA EVENT KEYS =>", Object.keys(message));
 
-  console.log("🔥 WhatsApp EVENT KEYS =>", Object.keys(message));
-
-  const from = message.from; // رقم العميل
+  const from = message.from; // رقم العميل (بصيغة E.164 مثل 9665...)
   const phoneNumberId = value.metadata?.phone_number_id;
 
   if (!from || !phoneNumberId) {
-    console.log("⚠️ Missing phone_number_id or from");
+    console.log("⚠️ Missing from or phone_number_id", { from, phoneNumberId });
     return;
   }
 
+  // ===================================================
+  // EXTRACT TEXT
+  // ===================================================
   let messageText: string | null = null;
 
   if (message.type === "text") {
     messageText = message.text?.body;
   } else if (message.type === "image") {
-    messageText = "📷 تم استلام صورة عبر واتساب";
+    messageText = "📷 تم استلام صورة عبر واتساب.";
   }
 
   if (!messageText) {
-    console.log("⚠️ No usable text in WA message");
+    console.log("⚠️ No usable text found in WA message");
     return;
   }
 
-  console.log(`📨 WhatsApp Message from ${from}: ${messageText}`);
+  console.log(`📨 WhatsApp message from ${from}: ${messageText}`);
 
   // ===================================================
-  // LOOKUP BOT BY phoneNumberId
+  // FIND BOT BY WHATSAPP PHONE NUMBER ID
   // ===================================================
   const botsRef = collection(db, "bots");
 
   const botsSnapshot = await getDocs(
-    query(botsRef, where("whatsappPhoneId", "==", phoneNumberId))
+    query(botsRef, where("whatsappPhoneNumberId", "==", phoneNumberId))
   );
 
   if (botsSnapshot.empty) {
-    console.log("❌ No bot found matching whatsappPhoneId:", phoneNumberId);
+    console.log("❌ No bot found for whatsappPhoneNumberId:", phoneNumberId);
     return;
   }
 
-  const bot = botsSnapshot.docs[0].data() as BotConfig;
+  console.log("✅ Bot Found for WhatsApp!");
 
-  // ===================================================
-  // LISTEN MODE — WITHOUT REPLY
-  // ===================================================
-  if (bot.isListeningOnly) {
-    console.log("🔇 Bot is in LISTEN MODE — no replies will be sent");
+  const botDoc = botsSnapshot.docs[0];
+  const bot = botDoc.data() as BotConfig;
+
+  // وضع الاستماع فقط (يسجل المحادثة بدون رد)
+  if (bot.isListening) {
+    console.log("🔇 Bot in LISTEN mode — no reply will be sent");
     return;
   }
 
@@ -142,31 +157,34 @@ async function processWhatsAppMessage(value: any, message: any) {
   }
 
   if (!bot.whatsappAccessToken) {
-    console.log("❌ Missing whatsappAccessToken in DB");
+    console.log("❌ Missing whatsappAccessToken");
     return;
   }
 
   // ===================================================
-  // GENERATE AI REPLY
+  // GENERATE AI REPLY USING SAME SETTINGS LOGIC
   // ===================================================
   let replyText = "";
 
   try {
     const model = getModel();
 
-    const systemInstruction =
-      "أنت مساعد ذكي للرد على العملاء عبر رسائل واتساب. " +
-      "اكتب باحترافية، باختصار، وبأسلوب لطيف.";
+    // نستخدم نفس العقل (GENERATE_SYSTEM_INSTRUCTION) اللي تستخدمه في الشات
+    const systemInstruction = GENERATE_SYSTEM_INSTRUCTION(
+      bot,
+      "",          // dynamicContext حالياً فاضي
+      undefined,   // userProfile غير متوفر هنا
+      -1           // نعتبرها أول رسالة (تقدر تطورها لاحقاً)
+    );
 
     const result = await model.generateContent([
       { text: systemInstruction },
-      { text: messageText }
+      { text: messageText },
     ]);
 
     replyText = result.response.text();
-
-  } catch (err) {
-    console.log("❌ Gemini Error:", err);
+  } catch (error) {
+    console.error("❌ Gemini Error (WA):", error);
     return;
   }
 
@@ -176,10 +194,11 @@ async function processWhatsAppMessage(value: any, message: any) {
   }
 
   // ===================================================
-  // SEND WHATSAPP MESSAGE
+  // SEND WHATSAPP REPLY
   // ===================================================
   try {
     console.log("📤 Sending WhatsApp reply...");
+
     await sendWhatsAppMessage(
       phoneNumberId,
       from,
@@ -187,9 +206,9 @@ async function processWhatsAppMessage(value: any, message: any) {
       bot.whatsappAccessToken
     );
 
-    console.log("✅ WhatsApp Reply Sent!");
+    console.log("✅ WhatsApp reply sent!");
 
-  } catch (err) {
-    console.error("❌ Failed sending WA reply:", err);
+  } catch (error) {
+    console.error("❌ Failed sending WA reply:", error);
   }
 }
