@@ -136,6 +136,18 @@ export const ClientApp: React.FC<ClientAppProps> = ({ bot, onUpdateBot, onExit }
       onUpdateBot(updatedBot);
   };
 
+  const connectWhatsApp = async () => {
+    try {
+      const res = await fetch(`/api/whatsapp/connect?botId=${bot.id}`);
+      const data = await res.json();
+      if (data.url) {
+        window.location.href = data.url;
+      }
+    } catch (err) {
+      console.error("WhatsApp Connect Error:", err);
+    }
+  };
+
   const handleSaveSettings = async () => {
       const updatedBot = { ...bot, ...settingsForm };
       await botRepository.updateBot(updatedBot);
@@ -321,6 +333,9 @@ export const ClientApp: React.FC<ClientAppProps> = ({ bot, onUpdateBot, onExit }
                          </span>
                      </div>
                  </div>
+                 <button onClick={connectWhatsApp} className="w-full bg-green-600 text-white py-3 rounded-2xl font-bold shadow-md hover:bg-green-700 mt-4">
+                     ربط واتساب
+                 </button>
                  <p className="text-[10px] text-slate-400 text-center mt-3">{t('contactSupport')}</p>
              </div>
 
