@@ -421,7 +421,7 @@ export const ClientApp: React.FC<ClientAppProps> = ({ bot, onUpdateBot, onExit }
                             <label className="block text-xs font-bold text-slate-500 mb-1">اللهجة المستخدمة في الردود</label>
                             <select 
                               value={settingsForm.dialect}
-                              onChange={e => setSettingsForm({...settingsForm, dialect: e.target.value})}
+                              onChange={e => setSettingsForm({...settingsForm, dialect: e.target.value as 'sa' | 'kh' | 'eg' | 'sham' | 'fosha'})}
                               className="w-full p-3 bg-slate-50 rounded-xl text-sm outline-none focus:ring-2 focus:ring-cyan-100 appearance-none"
                             >
                               <option value="sa">🇸🇦 اللهجة السعودية — sa</option>

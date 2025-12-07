@@ -1,5 +1,6 @@
 
 import React from 'react';
+import Image from 'next/image';
 import { Message, Sender } from '../types';
 
 interface MessageBubbleProps {
@@ -37,10 +38,13 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
         {/* Image Attachment */}
         {message.imageUrl && (
           <div className={`mb-3 rounded-lg overflow-hidden border ${isUser ? 'border-white/20' : 'border-slate-200'}`}>
-            <img 
-              src={message.imageUrl} 
-              alt="User uploaded" 
+            <Image 
+              src={message.imageUrl}
+              alt="User uploaded"
+              width={800}
+              height={600}
               className="w-full h-auto object-cover max-h-64"
+              unoptimized
             />
           </div>
         )}
