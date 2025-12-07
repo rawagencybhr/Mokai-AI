@@ -6,6 +6,8 @@ import { db } from "@/services/firebaseConfig";
 import { getModel } from "@/lib/gemini";
 import { sendInstagramMessage } from "@/lib/meta";
 import { BotConfig } from "@/types";
+import { GENERATE_SYSTEM_INSTRUCTION } from "@/constants";
+
 
 export const dynamic = "force-dynamic";
 
@@ -127,23 +129,32 @@ async function processEvent(entryId: string, event: any) {
   // Generate reply
   let replyText = "";
 
-  try {
-    const model = getModel();
+try {
+  const model = getModel();
 
-    const systemInstruction =
-      "أنت مساعد ذكي ترد على العملاء عبر إنستغرام بالعربية بشكل مهذب وواضح ومختصر.";
+  const systemInstruction = GENERATE_SYSTEM_INSTRUCTION(
+    bot as any,                        // إعدادات البوت من Firestore
+    (bot as any).dynamicContext ?? "", // لو عندك هذا الحقل
+    undefined,                         // userProfile (حالياً مو مستخدم)
+    -1,                                // اعتبرها جلسة جديدة دائماً في إنستغرام
+    (bot as any).personalityLevel ?? 0.5,
+    (bot as any).emojiMode ?? true,
+    (bot as any).customInstructions ?? "",
+    (bot as any).merchantData ?? "",
+    (bot as any).dialect ?? "kh"
+  );
 
-    const result = await model.generateContent([
-      { text: systemInstruction },
-      { text: messageText }
-    ]);
+  const result = await model.generateContent([
+    { text: systemInstruction },
+    { text: messageText }
+  ]);
 
-    replyText = result.response.text();
+  replyText = result.response.text();
 
-  } catch (err) {
-    console.error("❌ AI Error:", err);
-    return;
-  }
+} catch (err) {
+  console.error("❌ AI Error:", err);
+  return;
+}
 
   if (!replyText) {
     console.log("⚠️ AI returned empty reply");
