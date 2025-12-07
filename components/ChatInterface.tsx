@@ -76,7 +76,18 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ bot, onBack }) => 
         : storeContext;
 
       // Pass userProfile to instruction
-      const systemInstruction = GENERATE_SYSTEM_INSTRUCTION(bot, dynamicContext, userProfile);
+      const merchantData = `اسم المتجر: ${bot.storeName}\nالموقع: ${bot.location}\nساعات العمل: ${bot.workHours}\nالمنتجات: ${bot.products || ''}`;
+      const systemInstruction = GENERATE_SYSTEM_INSTRUCTION(
+        bot,
+        dynamicContext,
+        userProfile,
+        -1,
+        (bot.toneValue || 50) / 100,
+        bot.useEmoji ?? true,
+        bot.additionalInfo || '',
+        merchantData,
+        bot.dialect || 'kh'
+      );
 
       // 3. Call Gemini
       const responseText = await sendMessageToGemini(

@@ -75,6 +75,7 @@ export interface BotConfig {
   businessType: string;
   workHours: string;
   language: BotLanguage; 
+  dialect?: 'sa' | 'kh' | 'eg' | 'sham' | 'fosha';
   
   // Legacy Tone
   tone: BotTone; 

@@ -46,7 +46,8 @@ export const ClientApp: React.FC<ClientAppProps> = ({ bot, onUpdateBot, onExit }
       location: bot.location,
       workHours: bot.workHours,
       locationUrl: bot.locationUrl || '',
-      country: bot.country || ''
+      country: bot.country || '',
+      dialect: bot.dialect || 'kh'
   });
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -395,7 +396,7 @@ export const ClientApp: React.FC<ClientAppProps> = ({ bot, onUpdateBot, onExit }
                                 value={settingsForm.locationUrl} 
                                 onChange={e => setSettingsForm({...settingsForm, locationUrl: e.target.value})} 
                                 className="w-full p-3 bg-slate-50 rounded-xl text-sm outline-none focus:ring-2 focus:ring-cyan-100" 
-                                placeholder="https://maps.google.com/..."
+                                placeholder="https://maps.google.com/..." 
                               />
                           </div>
                           <div>
@@ -414,6 +415,20 @@ export const ClientApp: React.FC<ClientAppProps> = ({ bot, onUpdateBot, onExit }
                                 <option value="oman">{t('oman')}</option>
                                 <option value="egypt">{t('egypt')}</option>
                                 <option value="jordan">{t('jordan')}</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-500 mb-1">اللهجة المستخدمة في الردود</label>
+                            <select 
+                              value={settingsForm.dialect}
+                              onChange={e => setSettingsForm({...settingsForm, dialect: e.target.value})}
+                              className="w-full p-3 bg-slate-50 rounded-xl text-sm outline-none focus:ring-2 focus:ring-cyan-100 appearance-none"
+                            >
+                              <option value="sa">🇸🇦 اللهجة السعودية — sa</option>
+                              <option value="kh">🇧🇭🇰🇼🇦🇪 خليجية عامة — kh</option>
+                              <option value="eg">🇪🇬 المصرية — eg</option>
+                              <option value="sham">🇱🇧🇸🇾🇯🇴 الشامية — sham</option>
+                              <option value="fosha">📘 الفصحى الرسمية — fosha</option>
                             </select>
                           </div>
                       </div>
