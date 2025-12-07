@@ -67,17 +67,15 @@ async function processInstagramEvent(event: any) {
   const senderId = event.sender?.id;        // IG user ID
   const pageId = event.recipient?.id;       // Page ID (used for reply)
 
-  // Extract message text
-  let messageText =
-    event.message?.text ??
-    event.message_edit?.text ??
-    null;
+  // Extract message text (handle edit-only events with no text)
+  let messageText = event.message?.text ?? null;
+  const isEditEvent = !!event.message_edit && !event.message?.text;
 
-  if (!senderId || !pageId || !messageText) {
+  if (!senderId || !pageId) {
     console.log("⚠️ Missing data", {
       senderId,
       pageId,
-      messageText,
+      messageText: messageText ?? null,
       keys: Object.keys(event)
     });
     return;
@@ -126,25 +124,35 @@ async function processInstagramEvent(event: any) {
   // 5) GENERATE SMART REPLY WITH SAFE FALLBACK
   // ===================================================
   const fallbackReply = `شكراً لتواصلك مع ${bot.storeName}. كيف نقدر نخدمك؟`;
-  const { reply, useFallback } = await generateInstagramSmartReply(
-    bot.id,
-    messageText,
-    fallbackReply,
-    {
-      userProfile: undefined,
-      history: [],
-    }
-  );
+  let replyText = fallbackReply;
+  let useFallback = true;
 
-  const replyText = reply || fallbackReply;
-  console.log("🤖 IG Reply:", { replyText, useFallback });
+  if (messageText && !isEditEvent) {
+    const smart = await generateInstagramSmartReply(
+      bot.id,
+      messageText,
+      fallbackReply,
+      {
+        userProfile: undefined,
+        history: [],
+      }
+    );
+    replyText = smart.reply || fallbackReply;
+    useFallback = smart.useFallback;
+  } else {
+    replyText = fallbackReply;
+    useFallback = true;
+  }
+
+  console.log("🤖 IG Reply:", { replyText, useFallback, isEditEvent });
 
   // ===================================================
   // 6) SEND MESSAGE BACK TO USER (THE MOST IMPORTANT PART)
   // ===================================================
   try {
+    const accountId = bot.instagramBusinessId || bot.instagramPageId || bot.facebookPageId || pageId;
     const sendResult = await sendInstagramMessage(
-      pageId,
+      accountId,
       senderId,
       replyText,
       bot.instagramAccessToken

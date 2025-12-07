@@ -24,6 +24,10 @@ export const generateInstagramSmartReply = async (
   const bot = await botRepository.getBot(botId);
   if (!bot) return { reply: fallbackReply, useFallback: true };
 
+  if (!text || !text.trim()) {
+    return { reply: fallbackReply, useFallback: true };
+  }
+
   const kb = bot.knowledgeBase || '';
   const related = getRelevantKnowledge(kb, text).join('\n');
   const merchantData = `اسم المتجر: ${bot.storeName}\nالموقع: ${bot.location}\nساعات العمل: ${bot.workHours}\n${related ? `مقتطفات ذات صلة:\n${related}` : ''}`;

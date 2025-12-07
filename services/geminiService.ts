@@ -7,18 +7,22 @@ const getApiKey = () => {
 };
 
 const normalizeHistory = (history: any[] = []): any[] => {
+  const cleaned = history.filter(h => h && h.role && h.parts && h.parts.length > 0);
+  // Ensure first role is 'user'
+  while (cleaned.length && cleaned[0].role !== 'user') cleaned.shift();
+  if (!cleaned.length) return [];
+  // Enforce alternation user->model->user...
   const out: any[] = [];
-  let prevRole: string | null = null;
-  for (const h of history) {
-    if (!h || !h.role || !h.parts || h.parts.length === 0) continue;
-    if (h.role === prevRole) continue;
+  let prev: string | null = null;
+  for (const h of cleaned) {
+    if (h.role === prev) continue;
     out.push(h);
-    prevRole = h.role;
+    prev = h.role;
   }
-  if (out.length && out[out.length - 1].role === 'user') {
-    out.pop();
-  }
-  return out;
+  // Do not end with 'user'
+  if (out.length && out[out.length - 1].role === 'user') out.pop();
+  // Limit window
+  return out.slice(-10);
 };
 
 export const createChatSession = (systemInstruction: string, history: any[] = []): any => {
@@ -28,10 +32,7 @@ export const createChatSession = (systemInstruction: string, history: any[] = []
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({ model: MODEL_NAME });
   const chat = model.startChat({
-    history: [
-      { role: 'model', parts: [{ text: systemInstruction }] },
-      ...normalizeHistory(history)
-    ],
+    history: normalizeHistory(history),
     generationConfig: {
       temperature: 0.7,
       topK: 40,
@@ -66,6 +67,7 @@ export const sendMessageToGemini = async (
       // Remove data URL prefix if present
       const cleanBase64 = imageBase64.split(',')[1] || imageBase64;
       messageContent = [
+        { text: systemInstruction },
         { text: text },
         {
           inlineData: {
@@ -75,7 +77,10 @@ export const sendMessageToGemini = async (
         }
       ];
     } else {
-      messageContent = text;
+      messageContent = [
+        { text: systemInstruction },
+        { text: text }
+      ];
     }
 
     const result = await chat.sendMessage(messageContent);
@@ -106,7 +111,7 @@ export const sendMessageToGeminiStructured = async (
 
     const chat = createChatSession(systemInstruction, history);
 
-    let parts: any[] = [{ text }];
+    let parts: any[] = [{ text: systemInstruction }, { text }];
     if (attachments && attachments.length) {
       attachments.forEach(a => {
         const clean = a.base64.split(',')[1] || a.base64;
