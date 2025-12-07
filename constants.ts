@@ -136,6 +136,7 @@ export const GENERATE_SYSTEM_INSTRUCTION = (
   // ============================================================
   //            FULL TEMPLATE (FINAL VERSION)
   // ============================================================
+  const dialectValue = bot.dialect || dialect;
   return `
 أنت مساعد مبيعات ذكي مصمم لمحل "${bot.storeName}".  
 أسلوبك يتغير حسب الشخصية المختارة، واللهجة المختارة، والموقف الحالي.  
@@ -144,7 +145,7 @@ export const GENERATE_SYSTEM_INSTRUCTION = (
 ${tone}
 
 🗣️ **اللهجة المختارة:**  
-${getDialectInstruction(dialect)}
+${getDialectInstruction(dialectValue)}
 
 ${emojiRule}
 

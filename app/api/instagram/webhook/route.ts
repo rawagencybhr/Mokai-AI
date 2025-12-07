@@ -1,14 +1,14 @@
-// app/api/webhook/route.ts
-
 import { NextRequest, NextResponse } from "next/server";
 import { collection, query, where, getDocs } from "firebase/firestore";
-import { db } from "@/services/firebaseConfig";
-import { getModel } from "@/lib/gemini";
+import { db } from "@/lib/firebase";
+import { GENERATE_SYSTEM_INSTRUCTION } from "@/constants";
 import { sendInstagramMessage } from "@/lib/meta";
 import { BotConfig } from "@/types";
+import { generateInstagramSmartReply } from "@/services/instagramSmartReply";
 
-export const dynamic = "force-dynamic";
-
+// ===================================================
+// 1) VERIFY WEBHOOK
+// ===================================================
 export async function GET(req: NextRequest) {
   const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN;
   const url = new URL(req.url);
@@ -24,19 +24,24 @@ export async function GET(req: NextRequest) {
   return new NextResponse("Invalid verify token", { status: 403 });
 }
 
+// ===================================================
+// 2) HANDLE INSTAGRAM EVENTS
+// ===================================================
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
 
+    console.log("📩 Instagram Webhook Event Received:\n", JSON.stringify(body, null, 2));
+
     if (body.object !== "instagram") {
-      return new NextResponse("Not Instagram Event", { status: 404 });
+      return new NextResponse("Not an Instagram event", { status: 404 });
     }
 
-    for (const entry of body.entry ?? []) {
+    for (const entry of body.entry) {
       if (!entry.messaging) continue;
 
-      for (const msgEvent of entry.messaging) {
-        await processEvent(entry.id, msgEvent);
+      for (const event of entry.messaging) {
+        await processInstagramEvent(event);
       }
     }
 
@@ -44,66 +49,58 @@ export async function POST(req: NextRequest) {
 
   } catch (err) {
     console.error("❌ Webhook Error:", err);
-    return new NextResponse("Internal Error", { status: 500 });
+    return new NextResponse("Internal Server Error", { status: 500 });
   }
 }
 
-async function processEvent(entryId: string, event: any) {
-  console.log("EVENT KEYS =>", Object.keys(event));
-
-  // Ignore anything not a message
-  if (!event.message) {
-    console.log("ℹ️ Ignored non-message event");
-    return;
-  }
-
-  // Ignore echo (messages sent by bot)
+// ===================================================
+// 3) PROCESS SINGLE INSTAGRAM EVENT
+// ===================================================
+async function processInstagramEvent(event: any) {
+  // Skip echo messages from IG
   if (event.message?.is_echo) {
-    console.log("ℹ️ Echo ignored");
+    console.log("ℹ️ Skipping echo message");
     return;
   }
 
-  const senderId = event.sender?.id;
-  const igBusinessId = event.recipient?.id;
+  // Extract sender + page ID (VERY IMPORTANT)
+  const senderId = event.sender?.id;        // IG user ID
+  const pageId = event.recipient?.id;       // Page ID (used for reply)
 
-  if (!senderId || !igBusinessId) {
-    console.log("⚠️ Missing sender or recipient ID");
+  // Extract message text
+  let messageText =
+    event.message?.text ??
+    event.message_edit?.text ??
+    null;
+
+  if (!senderId || !pageId || !messageText) {
+    console.log("⚠️ Missing data", {
+      senderId,
+      pageId,
+      messageText,
+      keys: Object.keys(event)
+    });
     return;
   }
 
-  // Extract message content
-  let messageText = event.message?.text || null;
+  console.log("📨 Incoming IG Message:", { senderId, pageId, messageText });
 
-  if (!messageText && event.message?.attachments?.[0]?.type === "image") {
-    messageText = "📷 تم استلام صورة من العميل.";
-  }
-
-  if (!messageText) {
-    console.log("⚠️ Empty message");
-    return;
-  }
-
-  console.log(`📨 Message from ${senderId} to ${igBusinessId}: ${messageText}`);
-
-  // Search bot
+  // ===================================================
+  // 4) FIND BOT BY PAGE ID
+  // ===================================================
   const botsRef = collection(db, "bots");
 
-  let botsSnap = await getDocs(
-    query(botsRef, where("instagramBusinessId", "==", igBusinessId))
+  let querySnapshot = await getDocs(
+    query(botsRef, where("instagramPageId", "==", pageId))
   );
 
-  if (botsSnap.empty) {
-    botsSnap = await getDocs(
-      query(botsRef, where("instagramPageId", "==", igBusinessId))
-    );
-  }
-
-  if (botsSnap.empty) {
-    console.log("❌ No bot matches this IG account");
+  if (querySnapshot.empty) {
+    console.log("⚠️ No bot found for pageId:", pageId);
     return;
   }
 
-  const bot = botsSnap.docs[0].data() as BotConfig;
+  const botDoc = querySnapshot.docs[0];
+  const bot = botDoc.data() as BotConfig;
 
   if (!bot.isActive) {
     console.log("⚠️ Bot inactive");
@@ -111,59 +108,41 @@ async function processEvent(entryId: string, event: any) {
   }
 
   if (!bot.instagramAccessToken) {
-    console.log("❌ Missing instagramAccessToken");
+    console.log("❌ Missing page access token!");
     return;
   }
 
-  // ⚠️ IMPORTANT!!!
-  // instagramPageId = facebookPageId (in your Firestore structure)
-  const pageId = bot.instagramPageId;
+  // ===================================================
+  // 5) GENERATE SMART REPLY WITH SAFE FALLBACK
+  // ===================================================
+  const fallbackReply = `شكراً لتواصلك مع ${bot.storeName}. كيف نقدر نخدمك؟`;
+  const { reply, useFallback } = await generateInstagramSmartReply(
+    bot.id,
+    messageText,
+    fallbackReply,
+    {
+      userProfile: undefined,
+      history: [],
+    }
+  );
 
-  if (!pageId) {
-    console.log("❌ instagramPageId missing — cannot send messages");
-    return;
-  }
+  const replyText = reply || fallbackReply;
+  console.log("🤖 IG Reply:", { replyText, useFallback });
 
-  // Generate reply
-  let replyText = "";
-
+  // ===================================================
+  // 6) SEND MESSAGE BACK TO USER (THE MOST IMPORTANT PART)
+  // ===================================================
   try {
-    const model = getModel();
-
-    const systemInstruction =
-      "أنت مساعد ذكي ترد على العملاء عبر إنستغرام بالعربية بشكل مهذب وواضح ومختصر.";
-
-    const result = await model.generateContent([
-      { text: systemInstruction },
-      { text: messageText }
-    ]);
-
-    replyText = result.response.text();
-
-  } catch (err) {
-    console.error("❌ AI Error:", err);
-    return;
-  }
-
-  if (!replyText) {
-    console.log("⚠️ AI returned empty reply");
-    return;
-  }
-
-  // Send reply using PAGE ID
-  try {
-    console.log("📤 Sending reply using PAGE ID:", pageId);
-
-    await sendInstagramMessage(
-      pageId,              // ← This is the Facebook Page ID
+    const sendResult = await sendInstagramMessage(
+      pageId,
       senderId,
       replyText,
       bot.instagramAccessToken
     );
 
-    console.log("✅ Reply sent successfully");
+    console.log("📤 IG Reply Sent:", sendResult);
 
   } catch (err) {
-    console.error("❌ Failed sending reply:", err);
+    console.error("❌ Failed to send reply:", err);
   }
 }

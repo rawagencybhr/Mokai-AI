@@ -49,7 +49,7 @@ const AppContent: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (activeBot && viewMode === 'client') {
+    if (activeBot && (viewMode === 'client' || viewMode === 'chat')) {
       const unsub = botRepository.listenToBot(activeBot.id, (b) => setActiveBot(b));
       return () => unsub();
     }
