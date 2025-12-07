@@ -33,6 +33,17 @@ export const botRepository = {
     });
   },
 
+  getBot: async (id: number): Promise<BotConfig | null> => {
+    try {
+      const botRef = doc(db, COLLECTION_NAME, id.toString());
+      const botSnap = await getDoc(botRef);
+      if (botSnap.exists()) return botSnap.data() as BotConfig;
+      return null;
+    } catch (error) {
+      return null;
+    }
+  },
+
   createBot: async (bot: BotConfig): Promise<BotConfig> => {
     const defaultStats = {
         totalConversations: 0,
@@ -63,6 +74,8 @@ export const botRepository = {
     bot.language = bot.language || 'ar';
     bot.dialect = bot.dialect || 'kh';
     bot.agentEngaged = false;
+    bot.autoHandoff = bot.autoHandoff ?? true;
+    bot.handoffSensitivity = bot.handoffSensitivity ?? 0.7;
     bot.licenseKey = generateLicenseKey();
     bot.isActivated = false;
     bot.toneValue = bot.toneValue || 50;

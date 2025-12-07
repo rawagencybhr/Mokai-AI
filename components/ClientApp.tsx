@@ -48,7 +48,9 @@ export const ClientApp: React.FC<ClientAppProps> = ({ bot, onUpdateBot, onOpenCh
       workHours: bot.workHours,
       locationUrl: bot.locationUrl || '',
       country: bot.country || '',
-      dialect: bot.dialect || 'kh'
+      dialect: bot.dialect || 'kh',
+      autoHandoff: bot.autoHandoff ?? true,
+      handoffSensitivity: bot.handoffSensitivity ?? 0.7
   });
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -284,6 +286,32 @@ export const ClientApp: React.FC<ClientAppProps> = ({ bot, onUpdateBot, onOpenCh
                      >
                          <div className={`w-4 h-4 bg-white rounded-full shadow-sm transform transition-transform ${useEmoji ? (dir === 'rtl' ? '-translate-x-6' : 'translate-x-6') : ''}`} />
                      </button>
+                 </div>
+
+                 {/* Handoff Controls */}
+                 <div className="flex items-center justify-between mb-6">
+                     <div>
+                         <p className="text-sm font-bold text-slate-800">تسليم المحادثة تلقائيًا</p>
+                         <p className="text-[10px] text-slate-400">يُرسل إشعار ويوقف ردود البوت عند الجاهزية أو نقص المعلومة</p>
+                     </div>
+                     <button 
+                        onClick={() => setSettingsForm({ ...settingsForm, autoHandoff: !settingsForm.autoHandoff })}
+                        className={`w-12 h-6 rounded-full p-1 transition-colors ${settingsForm.autoHandoff ? 'bg-cyan-500' : 'bg-slate-300'}`}
+                     >
+                         <div className={`w-4 h-4 bg-white rounded-full shadow-sm transform transition-transform ${settingsForm.autoHandoff ? (dir === 'rtl' ? '-translate-x-6' : 'translate-x-6') : ''}`} />
+                     </button>
+                 </div>
+                 <div className="mb-6">
+                     <div className="flex justify-between text-xs font-bold text-slate-500 mb-2">
+                         <span>حساسية التسليم</span>
+                         <span className="text-cyan-600">{Math.round((settingsForm.handoffSensitivity || 0.7) * 100)}%</span>
+                     </div>
+                     <input 
+                        type="range" min="0" max="100" 
+                        value={Math.round((settingsForm.handoffSensitivity || 0.7) * 100)} 
+                        onChange={(e) => setSettingsForm({ ...settingsForm, handoffSensitivity: Number(e.target.value) / 100 })}
+                        className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                     />
                  </div>
 
                  {/* Bot Mode (Segmented Control) */}

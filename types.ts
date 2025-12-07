@@ -95,6 +95,8 @@ export interface BotConfig {
   isActive: boolean;
   isListening: boolean;
   agentEngaged?: boolean;
+  autoHandoff?: boolean;
+  handoffSensitivity?: number;
   createdAt: string;
   stats?: BotStats;
 

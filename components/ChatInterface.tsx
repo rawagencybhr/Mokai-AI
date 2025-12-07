@@ -119,19 +119,33 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ bot, onBack }) => 
       // 4. Handle Special Tags
       let cleanResponse = responseText;
       let action: PendingAction | null = null;
+      const actionsFromModel = Array.isArray(structured.actions) ? structured.actions : [];
+      const conf = typeof structured.confidence === 'number' ? structured.confidence : 0.5;
+      const sensitivity = typeof bot.handoffSensitivity === 'number' ? bot.handoffSensitivity : 0.7;
+      const autoHandoff = bot.autoHandoff !== false;
 
-      if (responseText.includes('[[REQ_HANDOFF]]')) {
-         action = { id: Date.now().toString(), type: 'HOT_LEAD', userMessage: input };
-         cleanResponse = responseText.replace('[[REQ_HANDOFF]]', '').trim();
-         setAdminPanelOpen(true);
-      } else if (responseText.includes('[[REQ_DISCOUNT]]')) {
-         action = { id: Date.now().toString(), type: 'DISCOUNT_REQUEST', userMessage: input };
-         cleanResponse = responseText.replace('[[REQ_DISCOUNT]]', '').trim();
-         setAdminPanelOpen(true);
-      } else if (responseText.includes('[[UNKNOWN_QUERY]]')) {
-         action = { id: Date.now().toString(), type: 'UNKNOWN_QUERY', userMessage: input };
-         cleanResponse = responseText.replace('[[UNKNOWN_QUERY]]', '').trim();
-         setAdminPanelOpen(true);
+      const taggedHandoff = responseText.includes('[[REQ_HANDOFF]]');
+      const taggedDiscount = responseText.includes('[[REQ_DISCOUNT]]');
+      const taggedUnknown = responseText.includes('[[UNKNOWN_QUERY]]');
+
+      const modelWantsHandoff = actionsFromModel.includes('HANDOFF') || actionsFromModel.includes('HOT_LEAD');
+      const modelWantsDiscount = actionsFromModel.includes('DISCOUNT_REQUEST');
+      const modelUnknown = actionsFromModel.includes('UNKNOWN_QUERY');
+
+      const allowHandoff = autoHandoff && conf >= sensitivity;
+
+      if ((taggedHandoff || modelWantsHandoff) && allowHandoff) {
+        action = { id: Date.now().toString(), type: 'HOT_LEAD', userMessage: input };
+        cleanResponse = responseText.replace('[[REQ_HANDOFF]]', '').trim();
+        setAdminPanelOpen(true);
+      } else if ((taggedDiscount || modelWantsDiscount) && allowHandoff) {
+        action = { id: Date.now().toString(), type: 'DISCOUNT_REQUEST', userMessage: input };
+        cleanResponse = responseText.replace('[[REQ_DISCOUNT]]', '').trim();
+        setAdminPanelOpen(true);
+      } else if ((taggedUnknown || modelUnknown) && autoHandoff && conf >= Math.max(0.4, sensitivity - 0.2)) {
+        action = { id: Date.now().toString(), type: 'UNKNOWN_QUERY', userMessage: input };
+        cleanResponse = responseText.replace('[[UNKNOWN_QUERY]]', '').trim();
+        setAdminPanelOpen(true);
       }
 
       if (action) {
@@ -205,6 +219,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ bot, onBack }) => 
             >
                 <RefreshCw size={20} />
             </button>
+            {bot.agentEngaged && (
+              <button 
+                  onClick={async () => {
+                    const updated = { ...bot, agentEngaged: false } as BotConfig;
+                    await botRepository.updateBot(updated);
+                  }}
+                  className="px-3 py-2 rounded-xl text-sm font-bold bg-yellow-100 text-yellow-700 border border-yellow-200"
+              >
+                  استئناف الردود
+              </button>
+            )}
             <button 
                 onClick={() => setAdminPanelOpen(!adminPanelOpen)}
                 className={`flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-bold transition-all ${
