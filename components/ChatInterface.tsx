@@ -1,15 +1,14 @@
-
 'use client';
 import React, { useState, useRef, useEffect } from 'react';
 import { MessageBubble } from './MessageBubble';
 import { LoadingIndicator } from './LoadingIndicator';
 import { AdminPanel } from './AdminPanel';
-import { sendMessageToGemini, fileToBase64 } from '@/services/geminiService';
+import { sendMessageToGeminiStructured, fileToBase64 } from '@/services/geminiService';
 import { botRepository } from '@/services/botRepository';
 import { Message, Sender, PendingAction, BotConfig, UserProfile } from '@/types';
 import { GENERATE_SYSTEM_INSTRUCTION } from '@/constants';
 import { 
-  Power, UserCog, ChevronLeft, Send, Image as ImageIcon, 
+  Power, UserCog, ChevronLeft, Send, Image as ImageIcon, Mic,
   Settings, RefreshCw, AlertCircle, User
 } from 'lucide-react';
 
@@ -34,12 +33,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ bot, onBack }) => 
   const [adminPanelOpen, setAdminPanelOpen] = useState(false);
   const [storeContext, setStoreContext] = useState('');
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
+  const [selectedAudio, setSelectedAudio] = useState<File | null>(null);
   
   // User Identification Simulation
   const [userProfile, setUserProfile] = useState<UserProfile | undefined>(MOCK_USER);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const audioInputRef = useRef<HTMLInputElement>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -67,16 +68,28 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ bot, onBack }) => 
     setMessages(prev => [...prev, newUserMsg]);
     setInput('');
     setSelectedImage(null);
-    setIsLoading(true);
+  setIsLoading(true);
 
-    try {
+  try {
+      if (bot.agentEngaged) {
+        setIsLoading(false);
+        return;
+      }
       // 2. Generate Context
       const dynamicContext = isSystemCommand 
         ? `${storeContext}\n[توجيه مباشر من المالك]: ${input.substring(1)}` 
         : storeContext;
 
       // Pass userProfile to instruction
-      const merchantData = `اسم المتجر: ${bot.storeName}\nالموقع: ${bot.location}\nساعات العمل: ${bot.workHours}\nالمنتجات: ${bot.products || ''}`;
+      const getRelevantKnowledge = (kb: string, q: string) => {
+        const lines = kb.split('\n').filter(Boolean);
+        const tokens = q.toLowerCase().split(/\s+/).filter(t => t.length > 2);
+        const scored = lines.map(l => ({ l, s: tokens.reduce((a,t)=>a + (l.toLowerCase().includes(t)?1:0),0) }));
+        return scored.sort((a,b)=>b.s-a.s).slice(0,3).map(x=>x.l);
+      };
+      const kb = bot.knowledgeBase || '';
+      const related = getRelevantKnowledge(kb, newUserMsg.text).join('\n');
+      const merchantData = `اسم المتجر: ${bot.storeName}\nالموقع: ${bot.location}\nساعات العمل: ${bot.workHours}\n${related ? `مقتطفات ذات صلة:\n${related}` : ''}`;
       const systemInstruction = GENERATE_SYSTEM_INSTRUCTION(
         bot,
         dynamicContext,
@@ -88,13 +101,20 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ bot, onBack }) => 
         merchantData
       );
 
-      // 3. Call Gemini
-      const responseText = await sendMessageToGemini(
-        isSystemCommand ? "ننفذ التوجيه..." : newUserMsg.text, 
+      // 3. Build attachments and call Gemini (structured)
+      const attachments: { base64: string; mimeType: string }[] = [];
+      if (newUserMsg.imageUrl) attachments.push({ base64: newUserMsg.imageUrl, mimeType: 'image/jpeg' });
+      if (selectedAudio) {
+        const audio64 = await fileToBase64(selectedAudio);
+        attachments.push({ base64: audio64, mimeType: selectedAudio.type || 'audio/mpeg' });
+      }
+      const structured = await sendMessageToGeminiStructured(
+        isSystemCommand ? "ننفذ التوجيه..." : newUserMsg.text,
         systemInstruction,
-        messages, 
-        newUserMsg.imageUrl
+        messages,
+        attachments
       );
+      const responseText = structured.reply || "";
 
       // 4. Handle Special Tags
       let cleanResponse = responseText;
@@ -165,6 +185,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ bot, onBack }) => 
               <h2 className="font-bold text-slate-800 flex items-center gap-2">
                 {bot.botName}
                 <span className="bg-cyan-100 text-cyan-700 text-[10px] px-2 py-0.5 rounded-full border border-cyan-200">تجربة</span>
+                {bot.agentEngaged && (
+                  <span className="bg-yellow-100 text-yellow-700 text-[10px] px-2 py-0.5 rounded-full border border-yellow-200">تسليم للمالك</span>
+                )}
               </h2>
               {/* User Detection Badge */}
               <div className="flex items-center gap-1 text-xs text-slate-500 mt-0.5">
@@ -225,11 +248,19 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ bot, onBack }) => 
                   </button>
               </div>
            )}
+           {selectedAudio && (
+              <div className="flex items-center gap-2 mb-2 bg-slate-50 p-2 rounded-lg w-fit border border-slate-200">
+                  <span className="text-xs text-slate-600 truncate max-w-[150px]">{selectedAudio.name}</span>
+                  <button onClick={() => setSelectedAudio(null)} className="text-slate-400 hover:text-red-500">
+                      <Settings size={14} className="rotate-45" /> 
+                  </button>
+              </div>
+           )}
 
            <div className="flex items-end gap-2 relative">
               <button 
-                onClick={() => fileInputRef.current?.click()}
-                className="p-3 text-slate-400 hover:text-cyan-600 hover:bg-cyan-50 rounded-xl transition-colors mb-0.5"
+                 onClick={() => fileInputRef.current?.click()}
+                 className="p-3 text-slate-400 hover:text-cyan-600 hover:bg-cyan-50 rounded-xl transition-colors mb-0.5"
               >
                  <ImageIcon size={24} />
               </button>
@@ -240,6 +271,22 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ bot, onBack }) => 
                  accept="image/*"
                  onChange={(e) => {
                     if (e.target.files?.[0]) setSelectedImage(e.target.files[0]);
+                 }}
+              />
+
+              <button 
+                 onClick={() => audioInputRef.current?.click()}
+                 className="p-3 text-slate-400 hover:text-cyan-600 hover:bg-cyan-50 rounded-xl transition-colors mb-0.5"
+              >
+                 <Mic size={24} />
+              </button>
+              <input 
+                 type="file" 
+                 ref={audioInputRef}
+                 className="hidden"
+                 accept="audio/*"
+                 onChange={(e) => {
+                    if (e.target.files?.[0]) setSelectedAudio(e.target.files[0]);
                  }}
               />
 
@@ -256,9 +303,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ bot, onBack }) => 
 
               <button 
                 onClick={handleSend}
-                disabled={(!input.trim() && !selectedImage) || isLoading}
+                disabled={(!input.trim() && !selectedImage && !selectedAudio) || isLoading}
                 className={`p-3 rounded-xl mb-0.5 transition-all shadow-sm ${
-                    (!input.trim() && !selectedImage) || isLoading
+                    (!input.trim() && !selectedImage && !selectedAudio) || isLoading
                     ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
                     : 'bg-cyan-500 text-white hover:bg-cyan-600 hover:shadow-md hover:scale-105'
                 }`}

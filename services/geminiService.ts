@@ -1,4 +1,3 @@
-
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { MODEL_NAME } from "@/constants";
 import { Message, Sender } from "@/types";
@@ -75,6 +74,45 @@ export const sendMessageToGemini = async (
   }
 };
 
+export const sendMessageToGeminiStructured = async (
+  text: string,
+  systemInstruction: string,
+  previousMessages: Message[],
+  attachments?: { base64: string; mimeType: string }[]
+): Promise<{ reply: string; intent?: string; actions?: string[]; confidence?: number; raw?: string }> => {
+  try {
+    const history = previousMessages
+      .filter(msg => (msg.sender === Sender.USER || msg.sender === Sender.AGENT) && msg.text && msg.text.trim() !== "")
+      .slice(-10)
+      .map(msg => ({
+        role: msg.sender === Sender.USER ? 'user' : 'model',
+        parts: [{ text: msg.text }]
+      }));
+
+    const chat = createChatSession(systemInstruction, history);
+
+    let parts: any[] = [{ text }];
+    if (attachments && attachments.length) {
+      attachments.forEach(a => {
+        const clean = a.base64.split(',')[1] || a.base64;
+        parts.push({ inlineData: { mimeType: a.mimeType, data: clean } });
+      });
+    }
+
+    const result = await chat.sendMessage(parts);
+    const raw = result.response.text() || "";
+    try {
+      const parsed = JSON.parse(raw);
+      return { ...parsed, raw };
+    } catch {
+      return { reply: raw, raw };
+    }
+  } catch (error: any) {
+    console.error("Gemini API Error:", error);
+    return { reply: "آسف، واجهت مشكلة بسيطة في الشبكة. ممكن تعيد؟" };
+  }
+};
+
 export const fileToBase64 = (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -82,33 +120,4 @@ export const fileToBase64 = (file: File): Promise<string> => {
     reader.onload = () => resolve(reader.result as string);
     reader.onerror = (error) => reject(error);
   });
-};
-
-export const learnFromInteraction = async (
-    userQuestion: string,
-    ownerReply: string
-): Promise<string | null> => {
-    try {
-        const apiKey = getApiKey();
-        if (!apiKey) return null;
-        
-        const genAI = new GoogleGenerativeAI(apiKey);
-        
-        const prompt = `
-        You are an AI Apprentice learning from a Master Salesman.
-        Context: Customer Asked: "${userQuestion}", Owner Replied: "${ownerReply}"
-        Task: Create a "Golden Rule" in Arabic.
-        Output format: "عند السؤال عن [Topic]، الرد المعتمد هو: [Reply]"
-        If generic, return "NOTHING".
-        `;
-
-        const model = genAI.getGenerativeModel({ model: MODEL_NAME });
-        const result = await model.generateContent(prompt);
-        
-        const text = result.response.text()?.trim();
-        if (!text || text.includes("NOTHING")) return null;
-        return text;
-    } catch (error) {
-        return null;
-    }
 };

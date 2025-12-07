@@ -94,6 +94,7 @@ export interface BotConfig {
   platforms: string[];
   isActive: boolean;
   isListening: boolean;
+  agentEngaged?: boolean;
   createdAt: string;
   stats?: BotStats;
 

@@ -15,12 +15,13 @@ import { RawbotLogo } from './RawbotLogo';
 interface ClientAppProps {
   bot: BotConfig;
   onUpdateBot: (bot: BotConfig) => void;
+  onOpenChat: (bot: BotConfig) => void;
   onExit: () => void;
 }
 
 type Tab = 'dashboard' | 'settings' | 'support' | 'stats';
 
-export const ClientApp: React.FC<ClientAppProps> = ({ bot, onUpdateBot, onExit }) => {
+export const ClientApp: React.FC<ClientAppProps> = ({ bot, onUpdateBot, onOpenChat, onExit }) => {
   const { t, dir, language, setLanguage } = useLanguage();
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
   
@@ -201,6 +202,15 @@ export const ClientApp: React.FC<ClientAppProps> = ({ bot, onUpdateBot, onExit }
 
           {/* Body Content */}
           <main className="p-4 space-y-4 max-w-lg mx-auto">
+            {bot.pendingAction && (
+              <div className="bg-yellow-50 border border-yellow-200 text-yellow-700 p-3 rounded-2xl flex items-center justify-between">
+                <div className="text-xs font-bold">اشعار: {bot.pendingAction.type === 'HOT_LEAD' ? 'العميل جاهز للشراء' : bot.pendingAction.type === 'UNKNOWN_QUERY' ? 'معلومة ناقصة — نحتاج تدخل الإدارة' : 'طلب خصم'}</div>
+                <div className="flex items-center gap-2">
+                  <button onClick={async () => { await botRepository.updateBot({ ...bot, agentEngaged: true }); onOpenChat(bot); }} className="px-3 py-1 rounded-lg bg-cyan-600 text-white text-xs font-bold">ادخل للمحادثة</button>
+                  <button onClick={async () => { await botRepository.updatePendingAction(bot.id, null); }} className="px-3 py-1 rounded-lg bg-slate-100 text-slate-600 text-xs font-bold">تجاهل</button>
+                </div>
+              </div>
+            )}
              
              {/* 1. Instructions Card */}
              <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100">

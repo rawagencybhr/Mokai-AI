@@ -48,6 +48,13 @@ const AppContent: React.FC = () => {
     initApp();
   }, []);
 
+  useEffect(() => {
+    if (activeBot && viewMode === 'client') {
+      const unsub = botRepository.listenToBot(activeBot.id, (b) => setActiveBot(b));
+      return () => unsub();
+    }
+  }, [activeBot, viewMode]);
+
   const loadBots = async () => {
     // Only reload if not in standalone mode (Client shouldn't trigger full refreshes)
     if (isStandaloneMode) return;
@@ -155,6 +162,7 @@ const AppContent: React.FC = () => {
       <ClientApp 
         bot={activeBot} 
         onUpdateBot={handleUpdateBot}
+        onOpenChat={openChat}
         onExit={goBack}
       />
     );

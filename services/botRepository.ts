@@ -62,6 +62,7 @@ export const botRepository = {
     // Use selected language or default to 'ar'
     bot.language = bot.language || 'ar';
     bot.dialect = bot.dialect || 'kh';
+    bot.agentEngaged = false;
     bot.licenseKey = generateLicenseKey();
     bot.isActivated = false;
     bot.toneValue = bot.toneValue || 50;
