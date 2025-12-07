@@ -6,6 +6,21 @@ const getApiKey = () => {
     return process.env.GOOGLE_API_KEY || process.env.NEXT_PUBLIC_GOOGLE_API_KEY;
 };
 
+const normalizeHistory = (history: any[] = []): any[] => {
+  const out: any[] = [];
+  let prevRole: string | null = null;
+  for (const h of history) {
+    if (!h || !h.role || !h.parts || h.parts.length === 0) continue;
+    if (h.role === prevRole) continue;
+    out.push(h);
+    prevRole = h.role;
+  }
+  if (out.length && out[out.length - 1].role === 'user') {
+    out.pop();
+  }
+  return out;
+};
+
 export const createChatSession = (systemInstruction: string, history: any[] = []): any => {
   const apiKey = getApiKey();
   if (!apiKey) throw new Error("API Key not found. Please set GOOGLE_API_KEY.");
@@ -14,8 +29,8 @@ export const createChatSession = (systemInstruction: string, history: any[] = []
   const model = genAI.getGenerativeModel({ model: MODEL_NAME });
   const chat = model.startChat({
     history: [
-      { role: 'user', parts: [{ text: systemInstruction }] },
-      ...history
+      { role: 'model', parts: [{ text: systemInstruction }] },
+      ...normalizeHistory(history)
     ],
     generationConfig: {
       temperature: 0.7,

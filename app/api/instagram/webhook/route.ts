@@ -86,20 +86,30 @@ async function processInstagramEvent(event: any) {
   console.log("📨 Incoming IG Message:", { senderId, pageId, messageText });
 
   // ===================================================
-  // 4) FIND BOT BY PAGE ID
+  // 4) FIND BOT BY KNOWN IG IDENTIFIERS
   // ===================================================
   const botsRef = collection(db, "bots");
 
-  let querySnapshot = await getDocs(
-    query(botsRef, where("instagramPageId", "==", pageId))
-  );
+  const tryFetch = async (field: keyof BotConfig, value: string) => {
+    try {
+      const snap = await getDocs(query(botsRef, where(field as string, "==", value)) as any);
+      return snap;
+    } catch {
+      return { empty: true, docs: [] } as any;
+    }
+  };
 
-  if (querySnapshot.empty) {
-    console.log("⚠️ No bot found for pageId:", pageId);
+  let botSnap = await tryFetch("instagramPageId", pageId);
+  if (botSnap.empty) botSnap = await tryFetch("instagramBusinessId", pageId);
+  if (botSnap.empty) botSnap = await tryFetch("facebookPageId", pageId);
+  if (botSnap.empty) botSnap = await tryFetch("instagramUserId", pageId);
+
+  if (botSnap.empty) {
+    console.log("⚠️ No bot found for IG identifier:", pageId);
     return;
   }
 
-  const botDoc = querySnapshot.docs[0];
+  const botDoc = botSnap.docs[0];
   const bot = botDoc.data() as BotConfig;
 
   if (!bot.isActive) {
