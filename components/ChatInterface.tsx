@@ -52,14 +52,26 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ bot, onBack }) => 
 
   // Handle Send Message
   const handleSend = async () => {
-    if ((!input.trim() && !selectedImage) || isLoading) return;
+    if ((!input.trim() && !selectedImage && !selectedAudio) || isLoading) return;
 
     const isSystemCommand = input.startsWith('!');
     
-    // 1. Create User Message
+    let messageText = input;
+    if (selectedAudio && !input.trim()) {
+      const audio64 = await fileToBase64(selectedAudio);
+      const cleanAudio = audio64.split(',')[1] || audio64;
+      const resp = await fetch('/api/speech-to-text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audioBase64: cleanAudio })
+      });
+      const data = await resp.json();
+      messageText = (data?.text || '').trim() || input;
+    }
+
     const newUserMsg: Message = {
       id: Date.now().toString(),
-      text: input,
+      text: messageText,
       sender: isSystemCommand ? Sender.SYSTEM : Sender.USER, 
       timestamp: new Date(),
       imageUrl: selectedImage ? await fileToBase64(selectedImage) : undefined
@@ -68,6 +80,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ bot, onBack }) => 
     setMessages(prev => [...prev, newUserMsg]);
     setInput('');
     setSelectedImage(null);
+    setSelectedAudio(null);
   setIsLoading(true);
 
   try {
@@ -104,10 +117,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ bot, onBack }) => 
       // 3. Build attachments and call Gemini (structured)
       const attachments: { base64: string; mimeType: string }[] = [];
       if (newUserMsg.imageUrl) attachments.push({ base64: newUserMsg.imageUrl, mimeType: 'image/jpeg' });
-      if (selectedAudio) {
-        const audio64 = await fileToBase64(selectedAudio);
-        attachments.push({ base64: audio64, mimeType: selectedAudio.type || 'audio/mpeg' });
-      }
       const structured = await sendMessageToGeminiStructured(
         isSystemCommand ? "ننفذ التوجيه..." : newUserMsg.text,
         systemInstruction,
