@@ -1,5 +1,4 @@
 // app/api/webhook/route.ts
-
 import { NextRequest, NextResponse } from "next/server";
 import { collection, query, where, getDocs } from "firebase/firestore";
 import { db } from "@/services/firebaseConfig";
@@ -12,16 +11,15 @@ import { SpeechClient } from "@google-cloud/speech";
 export const dynamic = "force-dynamic";
 
 // ===================================
-// 0) Google Speech Client (STT)
+// Google Speech Client
 // ===================================
 let speechClient: SpeechClient | null = null;
 
 function getSpeechClient() {
   if (!speechClient) {
     const raw = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
-    if (!raw) {
-      throw new Error("❌ Missing GOOGLE_APPLICATION_CREDENTIALS_JSON env");
-    }
+    if (!raw) throw new Error("❌ Missing GOOGLE_APPLICATION_CREDENTIALS_JSON env");
+
     const credentials = JSON.parse(raw);
     speechClient = new SpeechClient({
       credentials,
@@ -31,74 +29,27 @@ function getSpeechClient() {
   return speechClient!;
 }
 
-async function transcribeAudioFromUrl(
-  audioUrl: string,
-  accessToken?: string
-): Promise<string | null> {
+async function transcribeAudio(url: string): Promise<string | null> {
   try {
-    // لو الرابط ما فيه توكن نضيفه
-    const urlWithToken =
-      accessToken && !audioUrl.includes("access_token=")
-        ? `${audioUrl}&access_token=${accessToken}`
-        : audioUrl;
-
-    const res = await fetch(urlWithToken);
-    if (!res.ok) {
-      console.error("❌ Failed fetching audio:", res.status, res.statusText);
-      return null;
-    }
-
-    const arrayBuffer = await res.arrayBuffer();
-    const audioBytes = Buffer.from(arrayBuffer).toString("base64");
+    const res = await fetch(url);
+    const buffer = await res.arrayBuffer();
+    const audioBytes = Buffer.from(buffer).toString("base64");
 
     const client = getSpeechClient();
-
     const [response] = await client.recognize({
       audio: { content: audioBytes },
-      config: {
-        encoding: "OGG_OPUS", // أغلب رسائل إنستغرام الصوتية
-        languageCode: "ar-SA",
-      },
+      config: { encoding: "OGG_OPUS", languageCode: "ar-SA" },
     });
 
-    const transcript =
-      response.results?.[0]?.alternatives?.[0]?.transcript || null;
-
-    console.log("🎧 STT Transcript:", transcript);
-    return transcript;
-  } catch (err) {
-    console.error("❌ STT Error:", err);
-    return null;
-  }
-}
-
-async function fetchImageAsBase64(
-  imageUrl: string,
-  accessToken?: string
-): Promise<string | null> {
-  try {
-    const urlWithToken =
-      accessToken && !imageUrl.includes("access_token=")
-        ? `${imageUrl}&access_token=${accessToken}`
-        : imageUrl;
-
-    const res = await fetch(urlWithToken);
-    if (!res.ok) {
-      console.error("❌ Failed fetching image:", res.status, res.statusText);
-      return null;
-    }
-
-    const arrayBuffer = await res.arrayBuffer();
-    const base64 = Buffer.from(arrayBuffer).toString("base64");
-    return base64;
-  } catch (err) {
-    console.error("❌ Image fetch error:", err);
+    return response.results?.[0]?.alternatives?.[0]?.transcript || null;
+  } catch (e) {
+    console.error("STT ERROR:", e);
     return null;
   }
 }
 
 // ===================================
-// 1) VERIFY TOKEN (GET)
+// VERIFY TOKEN
 // ===================================
 export async function GET(req: NextRequest) {
   const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN;
@@ -108,225 +59,113 @@ export async function GET(req: NextRequest) {
   const token = url.searchParams.get("hub.verify_token");
   const challenge = url.searchParams.get("hub.challenge");
 
-  if (mode === "subscribe" && token === VERIFY_TOKEN) {
+  if (mode === "subscribe" && token === VERIFY_TOKEN)
     return new NextResponse(challenge, { status: 200 });
-  }
 
   return new NextResponse("Invalid verify token", { status: 403 });
 }
 
 // ===================================
-// 2) HANDLE INSTAGRAM WEBHOOK (POST)
+// MAIN WEBHOOK HANDLER
 // ===================================
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
+    console.log("📥 Incoming Webhook:", JSON.stringify(body, null, 2));
 
-    if (body.object !== "instagram") {
-      return new NextResponse("Not Instagram Event", { status: 404 });
+    // ❌ لا يوجد object=instagram في LIVE
+    if (body.object !== "page") {
+      console.log("Ignored event. object must be 'page'");
+      return new NextResponse("IGNORED", { status: 200 });
     }
 
     for (const entry of body.entry ?? []) {
-      if (!entry.messaging) continue;
-
-      for (const msgEvent of entry.messaging) {
-        await processEvent(msgEvent);
+      const messaging = entry.messaging ?? [];
+      for (const msg of messaging) {
+        await processEvent(entry.id, msg); // entry.id = PAGE_ID
       }
     }
 
     return new NextResponse("EVENT_RECEIVED", { status: 200 });
   } catch (err) {
     console.error("❌ Webhook Error:", err);
-    return new NextResponse("Internal Error", { status: 500 });
+    return new NextResponse("Internal error", { status: 500 });
   }
 }
 
 // ===================================
-// 3) PROCESS ONE EVENT
+// PROCESS EVENT
 // ===================================
-async function processEvent(event: any) {
-  console.log("EVENT KEYS =>", Object.keys(event));
+async function processEvent(pageId: string, event: any) {
+  console.log("⚡ EVENT KEYS:", Object.keys(event));
 
-  // 3.0 تجاهل أي شيء مو رسالة
-  if (!event.message) {
-    console.log("ℹ️ Ignored non-message event");
-    return;
-  }
-
-  // تجاهل رسائل البوت نفسه (echo)
-  if (event.message?.is_echo) {
-    console.log("ℹ️ Echo ignored");
-    return;
-  }
+  if (!event.message || event.message.is_echo) return;
 
   const senderId = event.sender?.id;
-  const igBusinessId = event.recipient?.id; // 1784... IG Business Account ID
+  if (!senderId) return;
 
-  if (!senderId || !igBusinessId) {
-    console.log("⚠️ Missing sender or recipient ID");
-    return;
-  }
-
-  // ===================================
-  // 3.1 ابحث عن البوت من خلال instagramBusinessId أو instagramPageId
-  // ===================================
+  // ======================
+  // find bot using pageId
+  // ======================
   const botsRef = collection(db, "bots");
+  const snap = await getDocs(query(botsRef, where("instagramPageId", "==", pageId)));
 
-  let botsSnap = await getDocs(
-    query(botsRef, where("instagramBusinessId", "==", igBusinessId))
-  );
-
-  if (botsSnap.empty) {
-    botsSnap = await getDocs(
-      query(botsRef, where("instagramPageId", "==", igBusinessId))
-    );
-  }
-
-  if (botsSnap.empty) {
-    console.log("❌ No bot matches this IG account");
+  if (snap.empty) {
+    console.log("❌ No bot matches pageId:", pageId);
     return;
   }
 
-  const bot = botsSnap.docs[0].data() as BotConfig;
-
-  if (!bot.isActive) {
-    console.log("⚠️ Bot inactive");
-    return;
-  }
-
+  const bot = snap.docs[0].data() as BotConfig;
+  if (!bot.isActive) return;
   if (!bot.instagramAccessToken) {
-    console.log("❌ Missing instagramAccessToken");
+    console.log("❌ Missing token in bot");
     return;
   }
 
-  // IG account id اللي نستخدمه للإرسال
-  const instagramAccountId = bot.instagramBusinessId || igBusinessId;
+  let messageText = event.message.text || null;
 
-  if (!instagramAccountId) {
-    console.log("❌ instagramBusinessId missing — cannot send messages");
-    return;
+  // IMAGE
+  let imagePart = null;
+  const attachment = event.message.attachments?.[0];
+
+  if (attachment?.type === "image") {
+    const imgUrl = attachment.payload.url;
+
+    const imgRes = await fetch(imgUrl);
+    const buf = await imgRes.arrayBuffer();
+    const base64 = Buffer.from(buf).toString("base64");
+
+    imagePart = { inlineData: { mimeType: "image/jpeg", data: base64 } };
+    if (!messageText)
+      messageText = "📸 العميل أرسل صورة. حلّلها بأفضل طريقة.";
   }
 
-  // ===================================
-  // 3.2 استخرج محتوى الرسالة: نص + صورة + صوت
-  // ===================================
-  let messageText: string | null = event.message?.text || null;
-  let imagePart: any | null = null;
+  // AUDIO
+  if (!messageText && attachment?.type === "audio") {
+    const audioUrl = attachment.payload.url;
+    const transcript = await transcribeAudio(audioUrl);
 
-  const firstAttachment = event.message?.attachments?.[0];
-
-  // 🖼 صورة
-  if (firstAttachment?.type === "image") {
-    const imageUrl = firstAttachment.payload?.url;
-    console.log("🖼 Image attachment URL:", imageUrl);
-
-    if (imageUrl) {
-      const base64 = await fetchImageAsBase64(
-        imageUrl,
-        bot.instagramAccessToken
-      );
-
-      if (base64) {
-        imagePart = {
-          inlineData: {
-            mimeType: "image/jpeg",
-            data: base64,
-          },
-        };
-
-        if (!messageText) {
-          messageText =
-            "الصورة مرفقة مع الرسالة، حلّلها وساعد العميل بأفضل طريقة حسب بيانات المتجر.";
-        }
-      }
-    }
+    messageText = transcript
+      ? `🎧 نص الرسالة الصوتية:\n"${transcript}"`
+      : "🎧 استلمت تسجيل صوتي لكن لم أستطع قراءته.";
   }
 
-  // 🎧 صوت
-  if (!messageText && firstAttachment?.type === "audio") {
-    const audioUrl = firstAttachment.payload?.url;
-    console.log("🎧 Audio attachment URL:", audioUrl);
+  if (!messageText && !imagePart) return;
 
-    if (audioUrl) {
-      const transcript = await transcribeAudioFromUrl(
-        audioUrl,
-        bot.instagramAccessToken
-      );
-      if (transcript) {
-        messageText = `العميل أرسل تسجيل صوتي، وهذا نصه التقريبي:\n"${transcript}"`;
-      } else {
-        messageText =
-          "📢 استلمت تسجيل صوتي من العميل لكن ما قدرت أقرأه بدقة. اطلب منه بلطف يكتب سؤاله نص.";
-      }
-    }
-  }
+  // Prepare prompt
+  const systemInstruction = GENERATE_SYSTEM_INSTRUCTION(bot, "", undefined, -1);
 
-  if (!messageText && !imagePart) {
-    console.log("⚠️ Empty message (no supported text/image/audio)");
-    return;
-  }
+  const model = getModel();
+  const parts = [{ text: systemInstruction }];
+  if (imagePart) parts.push(imagePart);
+  parts.push({ text: messageText });
 
-  console.log(
-    `📨 Message from ${senderId} to ${igBusinessId}: ${messageText || "[image/voice only]"}`
-  );
+  const result = await model.generateContent(parts);
+  const replyText = result.response.text();
+  if (!replyText) return;
 
-  // ===================================
-  // 3.3 حضّر الـ System Instruction
-  // ===================================
-  const systemInstruction = GENERATE_SYSTEM_INSTRUCTION(
-    bot,        // إعدادات البوت وبيانات المتجر
-    "",         // dynamicContext – تقدر تربطها بلوحة التحكم لاحقاً
-    undefined,  // userProfile – ما نستخدمه حالياً في إنستغرام
-    -1          // اعتبرها بداية جلسة جديدة (عشان الترحيب)
-  );
+  // SEND REPLY
+  await sendInstagramMessage(pageId, senderId, replyText, bot.instagramAccessToken);
 
-  // ===================================
-  // 3.4 استدعاء Gemini مع نص + صورة (لو فيه)
-  // ===================================
-  let replyText = "";
-
-  try {
-    const model = getModel();
-
-    const parts: any[] = [
-      { text: systemInstruction },
-    ];
-
-    if (imagePart) {
-      parts.push(imagePart);
-    }
-
-    if (messageText) {
-      parts.push({ text: messageText });
-    }
-
-    const result = await model.generateContent(parts);
-    replyText = result.response.text();
-  } catch (err) {
-    console.error("❌ AI Error:", err);
-    return;
-  }
-
-  if (!replyText) {
-    console.log("⚠️ AI returned empty reply");
-    return;
-  }
-
-  // ===================================
-  // 3.5 أرسل الرد للعميل في إنستغرام
-  // ===================================
-  try {
-    console.log("📤 Sending reply via IG Account ID:", instagramAccountId);
-
-    await sendInstagramMessage(
-      instagramAccountId,          // معرّف حساب إنستغرام للأعمال (1784...)
-      senderId,                    // العميل
-      replyText,
-      bot.instagramAccessToken
-    );
-
-    console.log("✅ Reply sent successfully");
-  } catch (err) {
-    console.error("❌ Failed sending reply:", err);
-  }
+  console.log("✅ Reply sent.");
 }
