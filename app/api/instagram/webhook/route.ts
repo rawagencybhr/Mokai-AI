@@ -7,10 +7,66 @@ import { getModel } from "@/lib/gemini";
 import { sendInstagramMessage } from "@/lib/meta";
 import { BotConfig } from "@/types";
 import { GENERATE_SYSTEM_INSTRUCTION } from "@/constants";
-
+import { SpeechClient } from "@google-cloud/speech";
 
 export const dynamic = "force-dynamic";
 
+// ==============================
+// 0) Google Speech Client (STT)
+// ==============================
+let speechClient: SpeechClient | null = null;
+
+function getSpeechClient() {
+  if (!speechClient) {
+    const raw = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
+    if (!raw) {
+      throw new Error("❌ Missing GOOGLE_APPLICATION_CREDENTIALS_JSON env");
+    }
+    const credentials = JSON.parse(raw);
+    speechClient = new SpeechClient({
+      credentials,
+      projectId: credentials.project_id,
+    });
+  }
+  return speechClient!;
+}
+
+async function transcribeAudioFromUrl(audioUrl: string): Promise<string | null> {
+  try {
+    const res = await fetch(audioUrl);
+    if (!res.ok) {
+      console.error("❌ Failed fetching audio:", res.status, res.statusText);
+      return null;
+    }
+
+    const arrayBuffer = await res.arrayBuffer();
+    const audioBytes = Buffer.from(arrayBuffer).toString("base64");
+
+    const client = getSpeechClient();
+
+    const [response] = await client.recognize({
+      audio: { content: audioBytes },
+      config: {
+        // أغلب تسجيلات إنستغرام تكون OGG/OPUS – لو اختلفت عندك ممكن تعدّلها لاحقاً
+        encoding: "OGG_OPUS",
+        languageCode: "ar-SA",
+      },
+    });
+
+    const transcript =
+      response.results?.[0]?.alternatives?.[0]?.transcript || null;
+
+    console.log("🎧 STT Transcript:", transcript);
+    return transcript;
+  } catch (err) {
+    console.error("❌ STT Error:", err);
+    return null;
+  }
+}
+
+// ==============================
+// 1) VERIFY TOKEN (GET)
+// ==============================
 export async function GET(req: NextRequest) {
   const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN;
   const url = new URL(req.url);
@@ -26,6 +82,9 @@ export async function GET(req: NextRequest) {
   return new NextResponse("Invalid verify token", { status: 403 });
 }
 
+// ==============================
+// 2) HANDLE INSTAGRAM WEBHOOK (POST)
+// ==============================
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -38,19 +97,21 @@ export async function POST(req: NextRequest) {
       if (!entry.messaging) continue;
 
       for (const msgEvent of entry.messaging) {
-        await processEvent(entry.id, msgEvent);
+        await processEvent(msgEvent);
       }
     }
 
     return new NextResponse("EVENT_RECEIVED", { status: 200 });
-
   } catch (err) {
     console.error("❌ Webhook Error:", err);
     return new NextResponse("Internal Error", { status: 500 });
   }
 }
 
-async function processEvent(entryId: string, event: any) {
+// ==============================
+// 3) PROCESS INDIVIDUAL EVENT
+// ==============================
+async function processEvent(event: any) {
   console.log("EVENT KEYS =>", Object.keys(event));
 
   // Ignore anything not a message
@@ -73,21 +134,45 @@ async function processEvent(entryId: string, event: any) {
     return;
   }
 
-  // Extract message content
-  let messageText = event.message?.text || null;
+  // ==============================
+  // 3.1 Extract message content
+  // ==============================
+  let messageText: string | null = event.message?.text || null;
 
-  if (!messageText && event.message?.attachments?.[0]?.type === "image") {
-    messageText = "📷 تم استلام صورة من العميل.";
+  const firstAttachment = event.message?.attachments?.[0];
+
+  // صورة
+  if (!messageText && firstAttachment?.type === "image") {
+    messageText =
+      "📷 تم استلام صورة من العميل. حلل الصورة وساعده باللي يخدمه حسب بيانات المتجر.";
+  }
+
+  // صوت
+  if (!messageText && firstAttachment?.type === "audio") {
+    const audioUrl = firstAttachment.payload?.url;
+    console.log("🎧 Audio attachment URL:", audioUrl);
+
+    if (audioUrl) {
+      const transcript = await transcribeAudioFromUrl(audioUrl);
+      if (transcript) {
+        messageText = `العميل أرسل تسجيل صوتي، وهذا نصه التقريبي:\n"${transcript}"`;
+      } else {
+        messageText =
+          "📢 استلمت تسجيل صوتي من العميل لكن ما قدرت أقرأه بدقة. اطلب منه بلطف يكتب سؤاله نص.";
+      }
+    }
   }
 
   if (!messageText) {
-    console.log("⚠️ Empty message");
+    console.log("⚠️ Empty message (no text/image/audio supported)");
     return;
   }
 
   console.log(`📨 Message from ${senderId} to ${igBusinessId}: ${messageText}`);
 
-  // Search bot
+  // ==============================
+  // 3.2 Search bot in Firestore
+  // ==============================
   const botsRef = collection(db, "bots");
 
   let botsSnap = await getDocs(
@@ -117,63 +202,60 @@ async function processEvent(entryId: string, event: any) {
     return;
   }
 
-  // ⚠️ IMPORTANT!!!
-  // instagramPageId = facebookPageId (in your Firestore structure)
   const pageId = bot.instagramPageId;
-
   if (!pageId) {
     console.log("❌ instagramPageId missing — cannot send messages");
     return;
   }
 
-  // Generate reply
-  let replyText = "";
-
-try {
-  const model = getModel();
-
+  // ==============================
+  // 3.3 Generate smart system instruction
+  // ==============================
   const systemInstruction = GENERATE_SYSTEM_INSTRUCTION(
-    bot as any,                        // إعدادات البوت من Firestore
-    (bot as any).dynamicContext ?? "", // لو عندك هذا الحقل
-    undefined,                         // userProfile (حالياً مو مستخدم)
-    -1,                                // اعتبرها جلسة جديدة دائماً في إنستغرام
-    (bot as any).personalityLevel ?? 0.5,
-    (bot as any).emojiMode ?? true,
-    (bot as any).customInstructions ?? "",
-    (bot as any).merchantData ?? "",
-    (bot as any).dialect ?? "kh"
+    bot,        // إعدادات البوت (تحتوي بيانات المتجر + اللهجة + النبرة...)
+    "",         // dynamicContext (تقدر تربطه لاحقاً من لوحة التحكم)
+    undefined,  // userProfile (غير مستخدم حالياً في إنستغرام)
+    -1          // اعتبره دائماً بداية جلسة جديدة من ناحية الترحيب
   );
 
-  const result = await model.generateContent([
-    { text: systemInstruction },
-    { text: messageText }
-  ]);
+  // ==============================
+  // 3.4 AI reply using Gemini
+  // ==============================
+  let replyText = "";
 
-  replyText = result.response.text();
+  try {
+    const model = getModel();
 
-} catch (err) {
-  console.error("❌ AI Error:", err);
-  return;
-}
+    const result = await model.generateContent([
+      { text: systemInstruction },
+      { text: messageText }
+    ]);
+
+    replyText = result.response.text();
+  } catch (err) {
+    console.error("❌ AI Error:", err);
+    return;
+  }
 
   if (!replyText) {
     console.log("⚠️ AI returned empty reply");
     return;
   }
 
-  // Send reply using PAGE ID
+  // ==============================
+  // 3.5 Send reply back to IG user
+  // ==============================
   try {
     console.log("📤 Sending reply using PAGE ID:", pageId);
 
     await sendInstagramMessage(
-      pageId,              // ← This is the Facebook Page ID
-      senderId,
+      pageId,              // Facebook Page ID
+      senderId,            // Customer ID
       replyText,
       bot.instagramAccessToken
     );
 
     console.log("✅ Reply sent successfully");
-
   } catch (err) {
     console.error("❌ Failed sending reply:", err);
   }
