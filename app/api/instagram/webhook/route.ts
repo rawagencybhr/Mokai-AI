@@ -1,4 +1,5 @@
-// app/api/webhook/route.ts
+// app/api/instagram/webhook/route.ts
+
 import { NextRequest, NextResponse } from "next/server";
 import { collection, query, where, getDocs } from "firebase/firestore";
 import { db } from "@/services/firebaseConfig";
@@ -10,15 +11,15 @@ import { SpeechClient } from "@google-cloud/speech";
 
 export const dynamic = "force-dynamic";
 
-// ===================================
-// Google Speech Client
-// ===================================
+// ==============================
+//  Google STT Client
+// ==============================
 let speechClient: SpeechClient | null = null;
 
 function getSpeechClient() {
   if (!speechClient) {
     const raw = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
-    if (!raw) throw new Error("❌ Missing GOOGLE_APPLICATION_CREDENTIALS_JSON env");
+    if (!raw) throw new Error("Missing GOOGLE_APPLICATION_CREDENTIALS_JSON env");
 
     const credentials = JSON.parse(raw);
     speechClient = new SpeechClient({
@@ -32,25 +33,27 @@ function getSpeechClient() {
 async function transcribeAudio(url: string): Promise<string | null> {
   try {
     const res = await fetch(url);
-    const buffer = await res.arrayBuffer();
-    const audioBytes = Buffer.from(buffer).toString("base64");
+    const buf = await res.arrayBuffer();
+    const audioBytes = Buffer.from(buf).toString("base64");
 
     const client = getSpeechClient();
     const [response] = await client.recognize({
       audio: { content: audioBytes },
-      config: { encoding: "OGG_OPUS", languageCode: "ar-SA" },
+      config: {
+        encoding: "OGG_OPUS",
+        languageCode: "ar-SA",
+      },
     });
 
     return response.results?.[0]?.alternatives?.[0]?.transcript || null;
-  } catch (e) {
-    console.error("STT ERROR:", e);
+  } catch {
     return null;
   }
 }
 
-// ===================================
-// VERIFY TOKEN
-// ===================================
+// ==============================
+//  VERIFY TOKEN (GET)
+// ==============================
 export async function GET(req: NextRequest) {
   const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN;
   const url = new URL(req.url);
@@ -65,107 +68,121 @@ export async function GET(req: NextRequest) {
   return new NextResponse("Invalid verify token", { status: 403 });
 }
 
-// ===================================
-// MAIN WEBHOOK HANDLER
-// ===================================
+// ==============================
+//  WEBHOOK HANDLER (POST)
+// ==============================
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    console.log("📥 Incoming Webhook:", JSON.stringify(body, null, 2));
 
-    // ❌ لا يوجد object=instagram في LIVE
-    if (body.object !== "page") {
-      console.log("Ignored event. object must be 'page'");
-      return new NextResponse("IGNORED", { status: 200 });
-    }
+    // Instagram via Messenger API = object = "page"
+    if (body.object !== "page")
+      return new NextResponse("Ignored", { status: 200 });
 
     for (const entry of body.entry ?? []) {
-      const messaging = entry.messaging ?? [];
-      for (const msg of messaging) {
-        await processEvent(entry.id, msg); // entry.id = PAGE_ID
+      for (const event of entry.messaging ?? []) {
+        await processEvent(entry.id, event);
       }
     }
 
     return new NextResponse("EVENT_RECEIVED", { status: 200 });
   } catch (err) {
-    console.error("❌ Webhook Error:", err);
-    return new NextResponse("Internal error", { status: 500 });
+    console.error("Webhook Error:", err);
+    return new NextResponse("Internal Error", { status: 500 });
   }
 }
 
-// ===================================
-// PROCESS EVENT
-// ===================================
+// ==============================
+//  PROCESS EACH EVENT
+// ==============================
 async function processEvent(pageId: string, event: any) {
-  console.log("⚡ EVENT KEYS:", Object.keys(event));
-
   if (!event.message || event.message.is_echo) return;
 
   const senderId = event.sender?.id;
   if (!senderId) return;
 
-  // ======================
-  // find bot using pageId
-  // ======================
-  const botsRef = collection(db, "bots");
-  const snap = await getDocs(query(botsRef, where("instagramPageId", "==", pageId)));
+  // Find bot by instagramPageId
+  const botsSnap = await getDocs(
+    query(collection(db, "bots"), where("instagramPageId", "==", pageId))
+  );
 
-  if (snap.empty) {
-    console.log("❌ No bot matches pageId:", pageId);
+  if (botsSnap.empty) {
+    console.log("No bot linked to this page:", pageId);
     return;
   }
 
-  const bot = snap.docs[0].data() as BotConfig;
+  const bot = botsSnap.docs[0].data() as BotConfig;
+
   if (!bot.isActive) return;
-  if (!bot.instagramAccessToken) {
-    console.log("❌ Missing token in bot");
-    return;
-  }
+  if (!bot.instagramAccessToken) return;
 
-  let messageText = event.message.text || null;
+  let messageText: string | null = event.message.text || null;
+  let imagePart: any = null;
 
-  // IMAGE
-  let imagePart = null;
   const attachment = event.message.attachments?.[0];
 
+  // ===== IMAGE =====
   if (attachment?.type === "image") {
     const imgUrl = attachment.payload.url;
 
-    const imgRes = await fetch(imgUrl);
-    const buf = await imgRes.arrayBuffer();
+    const res = await fetch(imgUrl);
+    const buf = await res.arrayBuffer();
     const base64 = Buffer.from(buf).toString("base64");
 
-    imagePart = { inlineData: { mimeType: "image/jpeg", data: base64 } };
+    imagePart = {
+      inlineData: {
+        mimeType: "image/jpeg",
+        data: base64,
+      },
+    } as any;
+
     if (!messageText)
-      messageText = "📸 العميل أرسل صورة. حلّلها بأفضل طريقة.";
+      messageText = "📸 العميل أرسل صورة. حللها بشكل ودود.";
   }
 
-  // AUDIO
+  // ===== AUDIO =====
   if (!messageText && attachment?.type === "audio") {
     const audioUrl = attachment.payload.url;
     const transcript = await transcribeAudio(audioUrl);
 
     messageText = transcript
       ? `🎧 نص الرسالة الصوتية:\n"${transcript}"`
-      : "🎧 استلمت تسجيل صوتي لكن لم أستطع قراءته.";
+      : "🎧 استلمت تسجيل صوتي، لكن لم أتمكن من قراءته.";
   }
 
   if (!messageText && !imagePart) return;
 
-  // Prepare prompt
+  // ===== GENERATE AI RESPONSE =====
   const systemInstruction = GENERATE_SYSTEM_INSTRUCTION(bot, "", undefined, -1);
 
-  const model = getModel();
-  const parts = [{ text: systemInstruction }];
+  const parts: any[] = [{ text: systemInstruction }];
+
   if (imagePart) parts.push(imagePart);
   parts.push({ text: messageText });
 
-  const result = await model.generateContent(parts);
-  const replyText = result.response.text();
+  let replyText = "";
+  try {
+    const model = getModel();
+    const result = await model.generateContent(parts);
+    replyText = result.response.text();
+  } catch (err) {
+    console.error("AI Error:", err);
+    return;
+  }
+
   if (!replyText) return;
 
-  // SEND REPLY
-  await sendInstagramMessage(pageId, senderId, replyText, bot.instagramAccessToken);
+  // ===== SEND MESSAGE BACK =====
+  try {
+    await sendInstagramMessage(
+      pageId,
+      senderId,
+      replyText,
+      bot.instagramAccessToken
+    );
 
-  console.log("✅ Reply sent.");
+    console.log("Reply sent successfully.");
+  } catch (err) {
+    console.error("Send Reply Error:", err);
+  }
 }
